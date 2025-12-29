@@ -1451,6 +1451,19 @@ async def dated_announce_error(interaction: discord.Interaction, error: app_comm
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message(f"Pong! Latency: {round(bot.latency * 1000)}ms", ephemeral=True)
 
+@bot.tree.command(name='viewprice', description='Displays the current price of Campton Coin for everyone.')
+async def view_price_public_cmd(interaction: discord.Interaction):
+    """Displays the current price of Campton Coin for anyone to see."""
+    await interaction.response.defer(ephemeral=False) # ephemeral=False makes it visible to everyone
+    current_coin_price = market_data["coins"][CAMPTOM_COIN_NAME]["price"]
+    embed = discord.Embed(
+        title="📈 Current Campton Coin Price 📉",
+        description=f"The current price of Campton Coin is **{current_coin_price:.2f} dollars**.",
+        color=discord.Color.blue()
+    )
+    await interaction.followup.send(embed=embed)
+
+# --- (The rest of your existing commands would follow here) ---
 
 # This bot.py file is designed to be run via main.py, which starts the bot.
 bot.run(TOKEN)
