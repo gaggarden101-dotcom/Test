@@ -13,8 +13,7 @@ from pathlib import Path
 import sys
 import logging
 from decimal import Decimal, ROUND_DOWN
-from typing import Any, Dict # <--- CRITICAL FIX: IMPORT Dict (and Any) from typing
-
+from typing import Any # Dict is not needed if using 'dict' for type hints
 
 # ────────────────────────── logging ────────────────────────────────
 log = logging.getLogger("campton_bot")
@@ -57,15 +56,16 @@ if not TOKEN:
     log.critical("DISCORD_BOT_TOKEN environment variable not found. Bot cannot start.")
     raise SystemExit(1)
 
-# ────────────────────────── constants ──────────────────────────────
+# ────────────────────────── constants (MOVED TO TOP) ──────────────────────────────
 PREFIX    = "!"
 DATA_FILE = Path("stock_market_data.json")
-CAMPTOM_COIN_NAME = "Campton Coin"
+CAMPTOM_COIN_NAME = "Campton Coin" # Defined here, before market_data uses it
 
-MIN_PRICE, MAX_PRICE      = 50.00, 230.00
-INITIAL_PRICE             = 120.00
-VOLATILITY                = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80,
-                             0.90, 1.00, 1.20, 1.50]
+MIN_PRICE, MAX_PRICE      = 50.00, 230.00 # Defined here
+INITIAL_PRICE             = 120.00 # Defined here
+VOLATILITY_LEVELS         = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80,
+                             0.90, 1.00, 1.20, 1.50] # Defined here
+CRYPTO_NAMES              = ["Campton Coin"] # Defined here
 
 # ────────────────────────── decimal helpers ────────────────────────
 def D(x: float|str|Decimal) -> Decimal:
@@ -93,7 +93,7 @@ def _ensure_data_dir_exists():
         DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
         log.info(f"Local data directory created: {DATA_FILE.parent}")
 
-def _write_atomic_local_fallback(data: dict[str, Any]): # <--- CHANGED Dict to dict
+def _write_atomic_local_fallback(data: dict[str, Any]):
     _ensure_data_dir_exists()
     tmp = DATA_FILE.with_suffix(".tmp")
     try:
@@ -104,7 +104,7 @@ def _write_atomic_local_fallback(data: dict[str, Any]): # <--- CHANGED Dict to d
     except Exception as e:
         log.error(f"Local fallback save failed: {e}")
 
-def _read_json_local_fallback() -> dict[str, Any]: # <--- CHANGED Dict to dict
+def _read_json_local_fallback() -> dict[str, Any]:
     _ensure_data_dir_exists()
     if not DATA_FILE.exists():
         log.info(f"Local fallback file {DATA_FILE} does not exist.")
@@ -142,8 +142,9 @@ async def save_data():
         try:
             log.info(f"SAVE_DATA_CALL: Checking for old backup messages in channel {ch.name} ({ch.id}).")
             deleted_old_backup = False
-            async for msg in ch.history(limit=10, author=bot.user):
-                if msg.attachments:
+            # REMOVED 'author=bot.user' due to potential 'unexpected keyword argument' error
+            async for msg in ch.history(limit=10): 
+                if msg.author == bot.user and msg.attachments: # <--- MANUAL FILTER
                     await msg.delete()
                     log.info(f"SAVE_DATA_CALL: Deleted old Discord backup message {msg.id}.")
                     deleted_old_backup = True
@@ -183,13 +184,14 @@ async def load_data_from_discord():
     
     try:
         log.info(f"LOAD_DATA_CALL: Searching for latest backup in channel {ch.name} ({ch.id}).")
-        async for msg in ch.history(limit=10, author=bot.user):
-            if msg.attachments:
+        # REMOVED 'author=bot.user' due to potential 'unexpected keyword argument' error
+        async for msg in ch.history(limit=10): 
+            if msg.author == bot.user and msg.attachments: # <--- MANUAL FILTER
                 data = await msg.attachments[0].read()
                 loaded = json.loads(data)
                 market_data.update(loaded)
                 log.info(f"LOAD_DATA_CALL: Loaded data from Discord backup message {msg.id}.")
-                return
+                return # Successfully loaded, exit
         log.info("LOAD_DATA_CALL: No Discord backup found; using local/default data.")
     except discord.Forbidden:
         log.error(f"LOAD_DATA_CALL: Discord load failed due to permissions in channel {ch.name} ({ch.id}). "
@@ -198,7 +200,9 @@ async def load_data_from_discord():
         log.error(f"LOAD_DATA_CALL: Failed to load Discord backup: {e}")
 
 
-market_data: dict[str, Any] = { # <--- CHANGED Dict to dict
+# Initial market_data structure, will be loaded from Discord in on_ready
+# Load local fallback first, will be overwritten by Discord backup if successful
+market_data: dict[str, Any] = {
     "coins": {CAMPTOM_COIN_NAME: {"price": INITIAL_PRICE}},
     "users": {},
     "tickets": {},
@@ -221,9 +225,9 @@ def price() -> Decimal:
     return Decimal(str(market_data["coins"][CAMPTOM_COIN_NAME]["price"]))
 
 def set_price(p: Decimal):
-    market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p)
+    market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p) # Store as float in JSON
 
-def get_user(uid: int) -> dict[str, Any]: # <--- CHANGED Dict to dict
+def get_user(uid: int) -> dict[str, Any]:
     s = str(uid)
     if s not in market_data["users"]:
         market_data["users"][s] = {
@@ -577,13 +581,14 @@ class VerifyView(discord.ui.View):
         super().__init__(timeout=None) 
         self.add_item(VerifyButton())
 
-# ────────────────────────── Discord Bot Events and Slash Commands ──────────────────────────
+# --- Discord Bot Events and Slash Commands ---
 
 @bot.event
 async def on_ready():
     global backup_channel_global
     log.info(f'BOT_READY: {bot.user.name} has connected to Discord!')
     
+    # 1. Try to fetch the backup channel early and store it globally
     if BACKUP_CHANNEL_ID:
         log.info(f"BOT_READY: Attempting to fetch backup channel {BACKUP_CHANNEL_ID}.")
         for i in range(5):
@@ -606,8 +611,10 @@ async def on_ready():
     else:
         log.warning("BOT_READY: BACKUP_CHANNEL_ID not set. Discord backup will not function.")
 
+    # 2. Load data from Discord backup (using the globally stored channel)
     await load_data_from_discord()
     
+    # 3. Ensure initial market data for coins is set up correctly after loading
     if CAMPTOM_COIN_NAME not in market_data["coins"] or len(market_data["coins"]) != len(CRYPTO_NAMES): 
         log.info(f"BOT_READY: Initializing/re-initializing coin data for {CAMPTOM_COIN_NAME}.")
         market_data["coins"] = {}
@@ -619,11 +626,13 @@ async def on_ready():
         market_data["coins"][CAMPTOM_COIN_NAME]["price"] = INITIAL_PRICE
         await save_data()
 
+    # 4. Add persistent views
     bot.add_view(TicketView())
     bot.add_view(VerifyView())
     await bot.tree.sync()
     log.info("BOT_READY: Slash commands synced!")
     
+    # 5. Start all scheduled tasks
     scheduled_price_update.start()
     check_investor_roles_task.start() 
     auto_convert_crypto_to_cash.start() 
