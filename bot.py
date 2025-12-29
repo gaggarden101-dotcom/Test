@@ -56,16 +56,16 @@ if not TOKEN:
     log.critical("DISCORD_BOT_TOKEN environment variable not found. Bot cannot start.")
     raise SystemExit(1)
 
-# ────────────────────────── constants (MOVED TO TOP) ──────────────────────────────
+# ────────────────────────── constants ──────────────────────────────
 PREFIX    = "!"
 DATA_FILE = Path("stock_market_data.json")
-CAMPTOM_COIN_NAME = "Campton Coin" # Defined here, before market_data uses it
+CAMPTOM_COIN_NAME = "Campton Coin" 
 
-MIN_PRICE, MAX_PRICE      = 50.00, 230.00 # Defined here
-INITIAL_PRICE             = 120.00 # Defined here
+MIN_PRICE, MAX_PRICE      = 50.00, 230.00
+INITIAL_PRICE             = 120.00
 VOLATILITY_LEVELS         = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80,
-                             0.90, 1.00, 1.20, 1.50] # Defined here
-CRYPTO_NAMES              = ["Campton Coin"] # Defined here
+                             0.90, 1.00, 1.20, 1.50]
+CRYPTO_NAMES              = ["Campton Coin"]
 
 # ────────────────────────── decimal helpers ────────────────────────
 def D(x: float|str|Decimal) -> Decimal:
@@ -126,10 +126,8 @@ async def save_data():
     async with save_lock:
         log.info("SAVE_DATA_CALL: Initiating save process (local & Discord backup).")
         
-        # 1. Save locally (this will be wiped on Render restarts, but good for immediate state)
         _write_atomic_local_fallback(market_data)
         
-        # 2. Upload to Discord (this is the persistent part)
         if not BACKUP_CHANNEL_ID:
             log.warning("SAVE_DATA_CALL: BACKUP_CHANNEL_ID not set in environment. Discord backup skipped.")
             return
@@ -142,9 +140,9 @@ async def save_data():
         try:
             log.info(f"SAVE_DATA_CALL: Checking for old backup messages in channel {ch.name} ({ch.id}).")
             deleted_old_backup = False
-            # REMOVED 'author=bot.user' due to potential 'unexpected keyword argument' error
+            # Manually filter by author for history() compatibility
             async for msg in ch.history(limit=10): 
-                if msg.author == bot.user and msg.attachments: # <--- MANUAL FILTER
+                if msg.author == bot.user and msg.attachments: 
                     await msg.delete()
                     log.info(f"SAVE_DATA_CALL: Deleted old Discord backup message {msg.id}.")
                     deleted_old_backup = True
@@ -152,7 +150,6 @@ async def save_data():
             if not deleted_old_backup:
                 log.info("SAVE_DATA_CALL: No old Discord backup message found to delete.")
             
-            # Upload new backup
             json_str = json.dumps(market_data, indent=4, default=str)
             await ch.send(
                 content=f"**Automated Data Backup** - {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
@@ -184,14 +181,14 @@ async def load_data_from_discord():
     
     try:
         log.info(f"LOAD_DATA_CALL: Searching for latest backup in channel {ch.name} ({ch.id}).")
-        # REMOVED 'author=bot.user' due to potential 'unexpected keyword argument' error
-        async for msg in ch.history(limit=10): 
-            if msg.author == bot.user and msg.attachments: # <--- MANUAL FILTER
+        # Manually filter by author for history() compatibility
+        async for msg in ch.history(limit=10):
+            if msg.author == bot.user and msg.attachments: 
                 data = await msg.attachments[0].read()
                 loaded = json.loads(data)
                 market_data.update(loaded)
                 log.info(f"LOAD_DATA_CALL: Loaded data from Discord backup message {msg.id}.")
-                return # Successfully loaded, exit
+                return
         log.info("LOAD_DATA_CALL: No Discord backup found; using local/default data.")
     except discord.Forbidden:
         log.error(f"LOAD_DATA_CALL: Discord load failed due to permissions in channel {ch.name} ({ch.id}). "
@@ -225,7 +222,7 @@ def price() -> Decimal:
     return Decimal(str(market_data["coins"][CAMPTOM_COIN_NAME]["price"]))
 
 def set_price(p: Decimal):
-    market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p) # Store as float in JSON
+    market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p)
 
 def get_user(uid: int) -> dict[str, Any]:
     s = str(uid)
@@ -261,53 +258,129 @@ def check_and_assign_investor_role(user_id: int, guild: discord.Guild):
         except Exception as e:
             log.warning(f"ROLE: Cannot assign role: {e}")
 
-# ────────────────────────── market logic ───────────────────────────
-def simulate_price() -> None:
-    cur = price()
-    vol = random.choice(VOLATILITY_LEVELS)
-    delta = random.uniform(-vol, vol)
-    new = max(MIN_PRICE, min(MAX_PRICE, float(cur) * (1 + delta)))
-    set_price(Decimal(str(round(new, 2))))
-    for u in market_data["users"].values():
-        u["on_buy_cooldown"] = False
+# ────────────────────────── market logic functions (DEFINED BEFORE USE) ───────────────────────────
+def update_prices():
+    for coin_name in market_data["coins"]: 
+        current_price = market_data["coins"][coin_name]["price"]
+        chosen_volatility = random.choice(VOLATILITY_LEVELS)
+        change_percent = random.uniform(-chosen_volatility, chosen_volatility)
+        new_price = current_price * (1 + change_percent)
+        new_price = max(MIN_PRICE, min(MAX_PRICE, new_price)) 
+        market_data["coins"][coin_name]["price"] = round(new_price, 2)
+    
+    for user_id_str in market_data["users"]:
+        market_data["users"][user_id_str]["on_buy_cooldown"] = False
+    
+    # Do not call await save_data() here, as this is a sync function.
+    # The calling task (scheduled_price_update) will call save_data()
+    log.info("INFO: Market prices updated and buy cooldown cleared (in sync update_prices).")
 
-async def convert_all() -> int:
-    g = guild()
-    if not g:
+def get_user_data(user_id): # This is a legacy function, get_user is preferred
+    user_id_str = str(user_id)
+    if user_id_str not in market_data["users"]:
+        market_data["users"][user_id_str] = {"balance": 0.0, "portfolio": {}, "verification": {}, "on_buy_cooldown": False}
+    elif "verification" not in market_data["users"][user_id_str]:
+        market_data["users"][user_id_str]["verification"] = {}
+    if "on_buy_cooldown" not in market_data["users"][user_id_str]:
+        market_data["users"][user_id_str]["on_buy_cooldown"] = False
+    return market_data["users"][user_id_str]
+
+def buy_coin_logic(user_id, coin_name, quantity_of_coins_to_buy):
+    user = get_user_data(user_id)
+    if coin_name not in market_data["coins"]:
+        return "Coin not found."
+
+    coin_price = market_data["coins"][coin_name]["price"]
+    cost = quantity_of_coins_to_buy * coin_price
+
+    if user["balance"] < cost:
+        return f"Insufficient funds. You need {cost:.2f} dollars but only have {user['balance']:.2f} dollars."
+
+    if user.get("on_buy_cooldown", False): 
+        return "You cannot buy Campton Coin until after the next market price update (approximately every 3 days)."
+
+    user["balance"] -= cost
+    user["portfolio"][coin_name] = user["portfolio"].get(coin_name, 0.0) + quantity_of_coins_to_buy
+    # Do not call await save_data() here. The calling command will.
+    return f"Successfully bought {quantity_of_coins_to_buy:.3f} {coin_name}(s) for {cost:.2f} dollars."
+
+def sell_coin_logic(user_id, coin_name, quantity):
+    user = get_user_data(user_id)
+    if coin_name not in market_data["coins"]:
+        return "Coin not found."
+    if coin_name not in user["portfolio"] or user["portfolio"][coin_name] < quantity:
+        return f"You don't own {quantity:.3f} {coin_name}(s). You have {user['portfolio'].get(coin_name, 0.0):.3f}."
+
+    coin_price = market_data["coins"][coin_name]["price"]
+    revenue = coin_price * quantity
+
+    user["balance"] += revenue
+    user["portfolio"][coin_name] -= quantity
+    if user["portfolio"][coin_name] <= 0.0001: 
+        del user["portfolio"][coin_name]
+    # Do not call await save_data() here. The calling command will.
+    return f"Successfully sold {quantity:.3f} {coin_name}(s) for {revenue:.2f} dollars."
+
+async def _perform_crypto_to_cash_conversion():
+    log.info("CONVERT: Initiating crypto to cash conversion logic...")
+    
+    if CAMPTOM_COIN_NAME not in market_data["coins"]:
+        log.warning(f"CONVERT: '{CAMPTOM_COIN_NAME}' not found in market data. Skipping conversion.")
+        return 0 
+
+    current_coin_price = market_data["coins"][CAMPTOM_COIN_NAME]["price"]
+    
+    target_guild = None
+    if bot.guilds:
+        target_guild = bot.guilds[0] 
+    if target_guild is None:
+        log.warning(f"CONVERT: Bot is not in any guild. Cannot perform crypto to cash conversion.")
         return 0
-    p = price()
-    cnt = 0
-    for uid, data in market_data["users"].items():
-        coins = D(str(data.get("portfolio", {}).get(CAMPTOM_COIN_NAME, 0.0)))
-        if coins == 0:
-            continue
-        cash = (coins * p).quantize(Decimal("0.01"))
-        data["balance"] = float(D(str(data.get("balance", 0.0))) + cash)
-        data["portfolio"].pop(CAMPTOM_COIN_NAME, None)
-        data["on_buy_cooldown"] = True
-        cnt += 1
-        m = g.get_member(int(uid))
-        if m and not m.bot:
-            try:
-                await m.send(
-                    f"Your {coins} {CAMPTOM_COIN_NAME} were auto-converted to {money(cash)} "
-                    f"at {money(p)} each."
-                )
-            except discord.Forbidden:
-                log.warning(f"CONVERT: Could not send DM to {m.display_name} about auto-conversion.")
-    market_data["next_conversion_timestamp"] = (
-        discord.utils.utcnow() + timedelta(days=7)
-    ).isoformat()
+
+    converted_count = 0
+    for user_id_str, user_data in list(market_data["users"].items()):
+        user_id = int(user_id_str)
+        member = target_guild.get_member(user_id)
+
+        if member and not member.bot: 
+            user_campton_coins = user_data.get("portfolio", {}).get(CAMPTOM_COIN_NAME, 0.0)
+
+            if user_campton_coins > 0.0:
+                cash_received = user_campton_coins * current_coin_price
+                user_data["balance"] += cash_received
+                user_data["portfolio"][CAMPTOM_COIN_NAME] = 0.0
+                del user_data["portfolio"][CAMPTOM_COIN_NAME]
+
+                user_data["on_buy_cooldown"] = True 
+
+                converted_count += 1
+                log.info(f"CONVERT: Converted {user_campton_coins:.3f} {CAMPTOM_COIN_NAME} for {member.display_name} ({user_id}) to {cash_received:.2f} dollars.")
+
+                try:
+                    await member.send(
+                        f"🔔 **Automatic Crypto Conversion!** 🔔\n\n"
+                        f"Your {user_campton_coins:.3f} {CAMPTOM_COIN_NAME} holdings have been automatically converted to cash.\n"
+                        f"You received **{cash_received:.2f} dollars** (at a price of {current_coin_price:.2f} dollars per coin).\n"
+                        f"Your new cash balance is: **{user_data['balance']:.2f} dollars**.\n\n"
+                        f"**You are now on a temporary buy cooldown and cannot purchase Campton Coin until after the next market price update.**"
+                    )
+                except discord.Forbidden:
+                    log.warning(f"CONVERT: Could not send DM to {member.display_name} about auto-conversion. DMs might be disabled.")
+                except Exception as e:
+                    log.error(f"CONVERT: Error sending auto-conversion DM to {member.display_name}: {e}")
+    
+    market_data["next_conversion_timestamp"] = (discord.utils.utcnow() + timedelta(days=7)).isoformat()
     await save_data()
-    return cnt
+    log.info(f"CONVERT: Crypto to cash conversion logic complete. {converted_count} users processed.")
+    return converted_count
 
 # ────────────────────────── background tasks ───────────────────────
 @tasks.loop(hours=72)
 async def scheduled_price_update():
     log.info("TASK_PRICE: Running scheduled price update...")
     await bot.change_presence(activity=discord.Game(name="Updating Market Prices...")) 
-    simulate_price() 
-    await save_data()
+    update_prices() # Sync function
+    await save_data() # Save after price update
     await bot.change_presence(activity=discord.Game(name="Campton Stocks RP")) 
     if ANNOUNCEMENT_CHANNEL_ID:
         channel = bot.get_channel(ANNOUNCEMENT_CHANNEL_ID)
@@ -330,6 +403,22 @@ async def before_scheduled_price_update():
 @tasks.loop(minutes=5)
 async def check_investor_roles_task():
     log.info("TASK_INV_ROLE: Running periodic investor role check task (can be removed if not needed).")
+    # This task is now lighter as `check_and_assign_investor_role` is called on transactions
+    # If you want a full sweep here, iterate guild.members and call check_and_assign_investor_role
+    # For now, it just logs its run.
+    target_guild = None
+    if bot.guilds:
+        target_guild = bot.guilds[0]
+
+    if target_guild is None:
+        log.warning(f"TASK_INV_ROLE: Bot is not in any guild. Cannot perform investor role checks.")
+        return
+
+    # If you want a full sweep, uncomment this:
+    # for member in target_guild.members:
+    #     if not member.bot:
+    #         check_and_assign_investor_role(member.id, target_guild)
+
 
 @check_investor_roles_task.before_loop
 async def before_check_investor_roles_task():
@@ -507,7 +596,7 @@ class VerificationModal(ui.Modal, title='Project New Campton Verification'):
 
         if not new_arrival_role or not campton_citizen_role:
             await interaction.followup.send("Verification roles are not correctly configured. Please contact server staff.", ephemeral=True)
-            log.error(f"ERROR: Verification roles not found. New Arrival ID: {NEW_ARRIVAL_ROLE_ID}, Citizen ID: {CAMPTON_CITIZEN_ROLE_ID}")
+            log.error(f"ERROR: Verification roles not found. New Arrival ID: {NEW_ARRIVAL_ROLE_ID}, Citizen ID: {CAMPTOM_CITIZEN_ROLE_ID}")
             return
 
         if campton_citizen_role in member.roles:
@@ -585,10 +674,9 @@ class VerifyView(discord.ui.View):
 
 @bot.event
 async def on_ready():
-    global backup_channel_global
+    global backup_channel_global 
     log.info(f'BOT_READY: {bot.user.name} has connected to Discord!')
     
-    # 1. Try to fetch the backup channel early and store it globally
     if BACKUP_CHANNEL_ID:
         log.info(f"BOT_READY: Attempting to fetch backup channel {BACKUP_CHANNEL_ID}.")
         for i in range(5):
@@ -611,10 +699,8 @@ async def on_ready():
     else:
         log.warning("BOT_READY: BACKUP_CHANNEL_ID not set. Discord backup will not function.")
 
-    # 2. Load data from Discord backup (using the globally stored channel)
     await load_data_from_discord()
     
-    # 3. Ensure initial market data for coins is set up correctly after loading
     if CAMPTOM_COIN_NAME not in market_data["coins"] or len(market_data["coins"]) != len(CRYPTO_NAMES): 
         log.info(f"BOT_READY: Initializing/re-initializing coin data for {CAMPTOM_COIN_NAME}.")
         market_data["coins"] = {}
@@ -626,13 +712,11 @@ async def on_ready():
         market_data["coins"][CAMPTOM_COIN_NAME]["price"] = INITIAL_PRICE
         await save_data()
 
-    # 4. Add persistent views
     bot.add_view(TicketView())
     bot.add_view(VerifyView())
     await bot.tree.sync()
     log.info("BOT_READY: Slash commands synced!")
     
-    # 5. Start all scheduled tasks
     scheduled_price_update.start()
     check_investor_roles_task.start() 
     auto_convert_crypto_to_cash.start() 
