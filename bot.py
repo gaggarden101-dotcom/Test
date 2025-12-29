@@ -10,23 +10,21 @@ import datetime
 from datetime import timedelta
 import io
 from pathlib import Path
-import sys # Import sys for explicit stdout logging
+import sys
+import logging # <--- CRITICAL FIX: Ensure logging is imported at the very top
 
 # ────────────────────────── logging ────────────────────────────────
 # Explicitly configure logger to ensure output to stdout
 log = logging.getLogger("campton_bot")
-log.setLevel(logging.INFO) # Set minimum level to INFO
-# Remove any default handlers to prevent duplicate output
+log.setLevel(logging.INFO)
 if log.handlers:
     for handler in log.handlers:
         log.removeHandler(handler)
-# Create a StreamHandler that writes to sys.stdout
 handler = logging.StreamHandler(sys.stdout)
 formatter = logging.Formatter("[{asctime}] [{levelname:<8}] {name}: {message}", style="{", datefmt="%Y-%m-%d %H:%M:%S")
 handler.setFormatter(formatter)
-# Add the handler to the logger
 log.addHandler(handler)
-# Also ensure discord.py messages are visible and go to stdout
+
 discord_logger = logging.getLogger('discord')
 if discord_logger.handlers:
     for handler in discord_logger.handlers:
@@ -35,13 +33,13 @@ discord_logger.addHandler(handler)
 discord_logger.setLevel(logging.INFO)
 
 # ────────────────────────── env / config ───────────────────────────
-# No local .env on Render, variables are set in Render dashboard
+# TOKEN must be defined before any other env_int calls in case they rely on it
+TOKEN = os.environ.get('DISCORD_BOT_TOKEN') 
 
 def env_int(k: str, default: int | None = None) -> int | None:
     v = os.getenv(k)
     return int(v) if v and v.isdigit() else default
 
-TOKEN                     = os.environ.get("DISCORD_BOT_TOKEN") 
 ANNOUNCEMENT_CHANNEL_ID   = env_int("ANNOUNCEMENT_CHANNEL_ID")
 TICKET_CATEGORY_ID        = env_int("TICKET_CATEGORY_ID")
 HELP_DESK_CHANNEL_ID      = env_int("HELP_DESK_CHANNEL_ID")
@@ -208,7 +206,7 @@ market_data: Dict[str, Any] = {
     "tickets": {},
     "next_conversion_timestamp": (discord.utils.utcnow() + timedelta(days=7)).isoformat(),
 }
-market_data.update(_read_json_local_fallback())
+market_data.update(_read_json_local_fallback()) # Initial load from local (will be empty on Render restarts)
 
 # ────────────────────────── discord objects ────────────────────────
 intents = discord.Intents.default()
@@ -738,7 +736,7 @@ async def buy(interaction: discord.Interaction, amount_of_cash: float):
     if '.' in s_cash:
         decimal_part_cash = s_cash.split('.')[1]
         if len(decimal_part_cash) > 2 and amount_of_cash * 100 != int(amount_of_cash * 100):
-            await interaction.followup.send("You can only spend cash with up to 2 decimal places (e.g., 50.00).", ephemeral=True)
+            await interaction.followup.send("You can only spend cash with up to 2 decimal places (e.00).", ephemeral=True)
             return
     
     current_coin_price = price() 
