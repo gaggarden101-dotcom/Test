@@ -11,24 +11,22 @@ from datetime import timedelta
 import io
 from pathlib import Path
 import sys
-import logging # <--- CRITICAL FIX: ENSURE THIS IS AT THE VERY TOP
-from decimal import Decimal, ROUND_DOWN # <--- CRITICAL FIX: ENSURE THIS IS IMPORTED
+import logging
+from decimal import Decimal, ROUND_DOWN
+from typing import Any, Dict # <--- CRITICAL FIX: IMPORT Dict (and Any) from typing
+
 
 # ────────────────────────── logging ────────────────────────────────
-# Explicitly configure logger to ensure output to stdout
 log = logging.getLogger("campton_bot")
 log.setLevel(logging.INFO)
-# Remove any default handlers to prevent duplicate output
 if log.handlers:
     for handler in log.handlers:
         log.removeHandler(handler)
-# Create a StreamHandler that writes to sys.stdout
 handler = logging.StreamHandler(sys.stdout)
 formatter = logging.Formatter("[{asctime}] [{levelname:<8}] {name}: {message}", style="{", datefmt="%Y-%m-%d %H:%M:%S")
 handler.setFormatter(formatter)
-# Add the handler to the logger
 log.addHandler(handler)
-# Also ensure discord.py messages are visible and go to stdout
+
 discord_logger = logging.getLogger('discord')
 if discord_logger.handlers:
     for handler in discord_logger.handlers:
@@ -37,7 +35,6 @@ discord_logger.addHandler(handler)
 discord_logger.setLevel(logging.INFO)
 
 # ────────────────────────── env / config ───────────────────────────
-# TOKEN must be defined before any other env_int calls in case they rely on it
 TOKEN                     = os.environ.get("DISCORD_BOT_TOKEN") 
 
 def env_int(k: str, default: int | None = None) -> int | None:
@@ -48,7 +45,7 @@ ANNOUNCEMENT_CHANNEL_ID   = env_int("ANNOUNCEMENT_CHANNEL_ID")
 TICKET_CATEGORY_ID        = env_int("TICKET_CATEGORY_ID")
 HELP_DESK_CHANNEL_ID      = env_int("HELP_DESK_CHANNEL_ID")
 VERIFY_CHANNEL_ID         = env_int("VERIFY_CHANNEL_ID")
-BACKUP_CHANNEL_ID         = env_int("BACKUP_CHANNEL_ID") # <--- CRUCIAL FOR PERSISTENCE
+BACKUP_CHANNEL_ID         = env_int("BACKUP_CHANNEL_ID")
 NEW_ARRIVAL_ROLE_ID       = env_int("NEW_ARRIVAL_ROLE_ID")
 CAMPTON_CITIZEN_ROLE_ID   = env_int("CAMPTON_CITIZEN_ROLE_ID")
 MARKET_INVESTOR_ROLE_ID   = env_int("MARKET_INVESTOR_ROLE_ID")
@@ -62,7 +59,7 @@ if not TOKEN:
 
 # ────────────────────────── constants ──────────────────────────────
 PREFIX    = "!"
-DATA_FILE = Path("stock_market_data.json") # <--- LOCAL, EPHEMERAL FILE
+DATA_FILE = Path("stock_market_data.json")
 CAMPTOM_COIN_NAME = "Campton Coin"
 
 MIN_PRICE, MAX_PRICE      = 50.00, 230.00
@@ -89,14 +86,14 @@ async def is_bot_owner_slash(interaction: discord.Interaction) -> bool:
 
 # ────────────────────────── data i/o (Discord backup) ──────────────
 save_lock = asyncio.Lock()
-backup_channel_global: discord.TextChannel | None = None # Global to store the fetched channel
+backup_channel_global: discord.TextChannel | None = None
 
 def _ensure_data_dir_exists():
     if not DATA_FILE.parent.exists():
         DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
         log.info(f"Local data directory created: {DATA_FILE.parent}")
 
-def _write_atomic_local_fallback(data: Dict[str, Any]):
+def _write_atomic_local_fallback(data: dict[str, Any]): # <--- CHANGED Dict to dict
     _ensure_data_dir_exists()
     tmp = DATA_FILE.with_suffix(".tmp")
     try:
@@ -107,7 +104,7 @@ def _write_atomic_local_fallback(data: Dict[str, Any]):
     except Exception as e:
         log.error(f"Local fallback save failed: {e}")
 
-def _read_json_local_fallback() -> Dict[str, Any]:
+def _read_json_local_fallback() -> dict[str, Any]: # <--- CHANGED Dict to dict
     _ensure_data_dir_exists()
     if not DATA_FILE.exists():
         log.info(f"Local fallback file {DATA_FILE} does not exist.")
@@ -137,7 +134,7 @@ async def save_data():
             log.warning("SAVE_DATA_CALL: BACKUP_CHANNEL_ID not set in environment. Discord backup skipped.")
             return
         
-        ch = backup_channel_global # Use the globally stored channel object
+        ch = backup_channel_global
         if not ch:
             log.warning(f"SAVE_DATA_CALL: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Discord backup skipped.")
             return
@@ -179,21 +176,20 @@ async def load_data_from_discord():
         log.warning("LOAD_DATA_CALL: BACKUP_CHANNEL_ID not set; will use local/default data.")
         return
     
-    ch = backup_channel_global # Use the globally stored channel object
+    ch = backup_channel_global
     if not ch:
         log.warning(f"LOAD_DATA_CALL: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Cannot load from Discord.")
         return
     
     try:
         log.info(f"LOAD_DATA_CALL: Searching for latest backup in channel {ch.name} ({ch.id}).")
-        # Look for the latest backup message from the bot
         async for msg in ch.history(limit=10, author=bot.user):
             if msg.attachments:
                 data = await msg.attachments[0].read()
                 loaded = json.loads(data)
                 market_data.update(loaded)
                 log.info(f"LOAD_DATA_CALL: Loaded data from Discord backup message {msg.id}.")
-                return # Successfully loaded, exit
+                return
         log.info("LOAD_DATA_CALL: No Discord backup found; using local/default data.")
     except discord.Forbidden:
         log.error(f"LOAD_DATA_CALL: Discord load failed due to permissions in channel {ch.name} ({ch.id}). "
@@ -202,15 +198,13 @@ async def load_data_from_discord():
         log.error(f"LOAD_DATA_CALL: Failed to load Discord backup: {e}")
 
 
-# Initial market_data structure, will be loaded from Discord in on_ready
-# Load local fallback first, will be overwritten by Discord backup if successful
-market_data: Dict[str, Any] = {
+market_data: dict[str, Any] = { # <--- CHANGED Dict to dict
     "coins": {CAMPTOM_COIN_NAME: {"price": INITIAL_PRICE}},
     "users": {},
     "tickets": {},
     "next_conversion_timestamp": (discord.utils.utcnow() + timedelta(days=7)).isoformat(),
 }
-market_data.update(_read_json_local_fallback()) # Initial load from local (will be empty on Render restarts)
+market_data.update(_read_json_local_fallback())
 
 # ────────────────────────── discord objects ────────────────────────
 intents = discord.Intents.default()
@@ -227,9 +221,9 @@ def price() -> Decimal:
     return Decimal(str(market_data["coins"][CAMPTOM_COIN_NAME]["price"]))
 
 def set_price(p: Decimal):
-    market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p) # Store as float in JSON
+    market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p)
 
-def get_user(uid: int) -> Dict[str, Any]:
+def get_user(uid: int) -> dict[str, Any]: # <--- CHANGED Dict to dict
     s = str(uid)
     if s not in market_data["users"]:
         market_data["users"][s] = {
@@ -583,20 +577,19 @@ class VerifyView(discord.ui.View):
         super().__init__(timeout=None) 
         self.add_item(VerifyButton())
 
-# --- Discord Bot Events and Slash Commands ---
+# ────────────────────────── Discord Bot Events and Slash Commands ──────────────────────────
 
 @bot.event
 async def on_ready():
-    global backup_channel_global # Declare global to assign to it
+    global backup_channel_global
     log.info(f'BOT_READY: {bot.user.name} has connected to Discord!')
     
-    # 1. Try to fetch the backup channel early and store it globally
     if BACKUP_CHANNEL_ID:
         log.info(f"BOT_READY: Attempting to fetch backup channel {BACKUP_CHANNEL_ID}.")
-        for i in range(5): # Try up to 5 times (total 5 seconds wait)
+        for i in range(5):
             try:
                 fetched_channel = await bot.fetch_channel(BACKUP_CHANNEL_ID)
-                if isinstance(fetched_channel, discord.TextChannel): # Ensure it's a text channel
+                if isinstance(fetched_channel, discord.TextChannel):
                     backup_channel_global = fetched_channel
                     log.info(f"BOT_READY: Backup channel {backup_channel_global.name} ({BACKUP_CHANNEL_ID}) fetched successfully.")
                     break
@@ -606,35 +599,31 @@ async def on_ready():
                 log.warning(f"BOT_READY: Backup channel {BACKUP_CHANNEL_ID} not found or forbidden ({e}). Attempt {i+1}/5. Retrying in 1s...")
             except Exception as e:
                 log.error(f"BOT_READY: Error fetching backup channel: {e}. Attempt {i+1}/5. Retrying in 1s...")
-            await asyncio.sleep(1) # Wait a bit before retrying fetch
+            await asyncio.sleep(1)
 
         if not backup_channel_global:
             log.error(f"BOT_READY: Failed to fetch backup channel {BACKUP_CHANNEL_ID} after multiple retries. Discord backup will not function.")
     else:
         log.warning("BOT_READY: BACKUP_CHANNEL_ID not set. Discord backup will not function.")
 
-    # 2. Load data from Discord backup (using the globally stored channel)
     await load_data_from_discord()
     
-    # 3. Ensure initial market data for coins is set up correctly after loading
     if CAMPTOM_COIN_NAME not in market_data["coins"] or len(market_data["coins"]) != len(CRYPTO_NAMES): 
         log.info(f"BOT_READY: Initializing/re-initializing coin data for {CAMPTOM_COIN_NAME}.")
         market_data["coins"] = {}
         for name in CRYPTO_NAMES: 
             market_data["coins"][name] = {"price": INITIAL_PRICE}
-        await save_data() # Save this initial state
+        await save_data()
     elif market_data["coins"][CAMPTOM_COIN_NAME]["price"] < MIN_PRICE or market_data["coins"][CAMPTOM_COIN_NAME]["price"] > MAX_PRICE:
         log.warning(f"BOT_READY: Detected Campton Coin price outside bounds ({market_data['coins'][CAMPTOM_COIN_NAME]['price']:.2f}). Resetting to INITIAL_PRICE.")
         market_data["coins"][CAMPTOM_COIN_NAME]["price"] = INITIAL_PRICE
-        await save_data() # Save this reset price
+        await save_data()
 
-    # 4. Add persistent views
     bot.add_view(TicketView())
     bot.add_view(VerifyView())
     await bot.tree.sync()
     log.info("BOT_READY: Slash commands synced!")
     
-    # 5. Start all scheduled tasks
     scheduled_price_update.start()
     check_investor_roles_task.start() 
     auto_convert_crypto_to_cash.start() 
@@ -739,7 +728,7 @@ async def buy(interaction: discord.Interaction, amount_of_cash: float):
     if '.' in s_cash:
         decimal_part_cash = s_cash.split('.')[1]
         if len(decimal_part_cash) > 2 and amount_of_cash * 100 != int(amount_of_cash * 100):
-            await interaction.followup.send("You can only spend cash with up to 2 decimal places (e.g., 50.00).", ephemeral=True)
+            await interaction.followup.send("You can only spend cash with up to 2 decimal places (e.00).", ephemeral=True)
             return
     
     current_coin_price = price() 
@@ -768,7 +757,7 @@ async def sell_cmd(interaction: discord.Interaction, quantity: float):
         await interaction.followup.send("You must sell a positive amount.", ephemeral=True)
         return
 
-    if too_many_decimals(Decimal(str(quantity)), 3): # Ensure quantity is Decimal for check
+    if too_many_decimals(Decimal(str(quantity)), 3):
         await interaction.followup.send("You can only sell Campton Coin with up to 3 decimal places (e.g., 0.123).", ephemeral=True)
         return
 
@@ -812,7 +801,7 @@ async def addcoins(interaction: discord.Interaction, member: discord.Member, qua
         await interaction.followup.send("Quantity must be greater than 0.", ephemeral=True)
         return
 
-    if too_many_decimals(Decimal(str(quantity)), 3): # Ensure quantity is Decimal for check
+    if too_many_decimals(Decimal(str(quantity)), 3):
         await interaction.followup.send("You can only add coins with up to 3 decimal places (e.g., 0.123).", ephemeral=True)
         return
 
