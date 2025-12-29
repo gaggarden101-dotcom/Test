@@ -16,22 +16,26 @@ import sys # Import sys for explicit stdout logging
 # Explicitly configure logger to ensure output to stdout
 log = logging.getLogger("campton_bot")
 log.setLevel(logging.INFO) # Set minimum level to INFO
+# Remove any default handlers to prevent duplicate output
+if log.handlers:
+    for handler in log.handlers:
+        log.removeHandler(handler)
 # Create a StreamHandler that writes to sys.stdout
 handler = logging.StreamHandler(sys.stdout)
 formatter = logging.Formatter("[{asctime}] [{levelname:<8}] {name}: {message}", style="{", datefmt="%Y-%m-%d %H:%M:%S")
 handler.setFormatter(formatter)
-# Add the handler to the logger if it's not already there
-if not log.handlers:
-    log.addHandler(handler)
-# Also ensure discord.py messages are visible
+# Add the handler to the logger
+log.addHandler(handler)
+# Also ensure discord.py messages are visible and go to stdout
 discord_logger = logging.getLogger('discord')
-if not discord_logger.handlers:
-    discord_logger.addHandler(handler)
-    discord_logger.setLevel(logging.INFO) # Keep discord.py logs at INFO
+if discord_logger.handlers:
+    for handler in discord_logger.handlers:
+        discord_logger.removeHandler(handler)
+discord_logger.addHandler(handler)
+discord_logger.setLevel(logging.INFO)
 
 # ────────────────────────── env / config ───────────────────────────
 # No local .env on Render, variables are set in Render dashboard
-# from dotenv import load_dotenv # Removed as it's not used for Render deployment
 
 def env_int(k: str, default: int | None = None) -> int | None:
     v = os.getenv(k)
@@ -121,32 +125,32 @@ def _read_json_local_fallback() -> Dict[str, Any]:
 async def save_data():
     """Save market_data to local file (ephemeral) AND to Discord backup channel (persistent)."""
     async with save_lock:
-        log.info("SAVE_DATA: Initiating save process (local & Discord backup).")
+        log.info("SAVE_DATA_CALL: Initiating save process (local & Discord backup).")
         
         # 1. Save locally (this will be wiped on Render restarts, but good for immediate state)
         _write_atomic_local_fallback(market_data)
         
         # 2. Upload to Discord (this is the persistent part)
         if not BACKUP_CHANNEL_ID:
-            log.warning("SAVE_DATA: BACKUP_CHANNEL_ID not set in environment. Discord backup skipped.")
+            log.warning("SAVE_DATA_CALL: BACKUP_CHANNEL_ID not set in environment. Discord backup skipped.")
             return
         
         ch = backup_channel_global # Use the globally stored channel object
         if not ch:
-            log.warning(f"SAVE_DATA: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Discord backup skipped.")
+            log.warning(f"SAVE_DATA_CALL: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Discord backup skipped.")
             return
 
         try:
-            log.info(f"SAVE_DATA: Checking for old backup messages in channel {ch.name} ({ch.id}).")
+            log.info(f"SAVE_DATA_CALL: Checking for old backup messages in channel {ch.name} ({ch.id}).")
             deleted_old_backup = False
             async for msg in ch.history(limit=10, author=bot.user):
                 if msg.attachments:
                     await msg.delete()
-                    log.info(f"SAVE_DATA: Deleted old Discord backup message {msg.id}.")
+                    log.info(f"SAVE_DATA_CALL: Deleted old Discord backup message {msg.id}.")
                     deleted_old_backup = True
                     break
             if not deleted_old_backup:
-                log.info("SAVE_DATA: No old Discord backup message found to delete.")
+                log.info("SAVE_DATA_CALL: No old Discord backup message found to delete.")
             
             # Upload new backup
             json_str = json.dumps(market_data, indent=4, default=str)
@@ -157,43 +161,43 @@ async def save_data():
                     filename="market_data.json"
                 )
             )
-            log.info("SAVE_DATA: Data backed up to Discord successfully.")
+            log.info("SAVE_DATA_CALL: Data backed up to Discord successfully.")
         except discord.Forbidden:
-            log.error(f"SAVE_DATA: Discord backup failed due to permissions in channel {ch.name} ({ch.id}). "
+            log.error(f"SAVE_DATA_CALL: Discord backup failed due to permissions in channel {ch.name} ({ch.id}). "
                       "Bot needs View Channel, Send Messages, Manage Messages, Attach Files.")
         except Exception as e:
-            log.error(f"SAVE_DATA: Discord backup failed with an unexpected error: {e}")
+            log.error(f"SAVE_DATA_CALL: Discord backup failed with an unexpected error: {e}")
 
 async def load_data_from_discord():
     """Load market_data from Discord backup on startup."""
     global market_data
-    log.info("LOAD_DATA: Attempting to load data from Discord backup.")
+    log.info("LOAD_DATA_CALL: Attempting to load data from Discord backup.")
     
     if not BACKUP_CHANNEL_ID:
-        log.warning("LOAD_DATA: BACKUP_CHANNEL_ID not set; will use local/default data.")
+        log.warning("LOAD_DATA_CALL: BACKUP_CHANNEL_ID not set; will use local/default data.")
         return
     
     ch = backup_channel_global # Use the globally stored channel object
     if not ch:
-        log.warning(f"LOAD_DATA: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Cannot load from Discord.")
+        log.warning(f"LOAD_DATA_CALL: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Cannot load from Discord.")
         return
     
     try:
-        log.info(f"LOAD_DATA: Searching for latest backup in channel {ch.name} ({ch.id}).")
+        log.info(f"LOAD_DATA_CALL: Searching for latest backup in channel {ch.name} ({ch.id}).")
         # Look for the latest backup message from the bot
         async for msg in ch.history(limit=10, author=bot.user):
             if msg.attachments:
                 data = await msg.attachments[0].read()
                 loaded = json.loads(data)
                 market_data.update(loaded)
-                log.info(f"LOAD_DATA: Loaded data from Discord backup message {msg.id}.")
+                log.info(f"LOAD_DATA_CALL: Loaded data from Discord backup message {msg.id}.")
                 return # Successfully loaded, exit
-        log.info("LOAD_DATA: No Discord backup found; using local/default data.")
+        log.info("LOAD_DATA_CALL: No Discord backup found; using local/default data.")
     except discord.Forbidden:
-        log.error(f"LOAD_DATA: Discord load failed due to permissions in channel {ch.name} ({ch.id}). "
+        log.error(f"LOAD_DATA_CALL: Discord load failed due to permissions in channel {ch.name} ({ch.id}). "
                   "Bot needs View Channel, Read Message History, Attach Files.")
     except Exception as e:
-        log.error(f"LOAD_DATA: Failed to load Discord backup: {e}")
+        log.error(f"LOAD_DATA_CALL: Failed to load Discord backup: {e}")
 
 
 # Initial market_data structure, will be loaded from Discord in on_ready
@@ -204,7 +208,7 @@ market_data: Dict[str, Any] = {
     "tickets": {},
     "next_conversion_timestamp": (discord.utils.utcnow() + timedelta(days=7)).isoformat(),
 }
-market_data.update(_read_json_local_fallback()) # Initial load from local (will be empty on Render restarts)
+market_data.update(_read_json_local_fallback())
 
 # ────────────────────────── discord objects ────────────────────────
 intents = discord.Intents.default()
@@ -253,9 +257,9 @@ def check_and_assign_investor_role(user_id: int, guild: discord.Guild):
     if (balance >= 20000.0 or coins >= 70.0) and inv_role not in member.roles:
         try:
             asyncio.create_task(member.add_roles(inv_role))
-            log.info(f"INFO: Queued investor role for {member.display_name}")
+            log.info(f"ROLE: Queued investor role for {member.display_name}")
         except Exception as e:
-            log.warning(f"WARNING: Cannot assign role: {e}")
+            log.warning(f"ROLE: Cannot assign role: {e}")
 
 # ────────────────────────── market logic ───────────────────────────
 def simulate_price() -> None:
@@ -290,7 +294,7 @@ async def convert_all() -> int:
                     f"at {money(p)} each."
                 )
             except discord.Forbidden:
-                log.warning(f"WARNING: Could not send DM to {m.display_name} about auto-conversion.")
+                log.warning(f"CONVERT: Could not send DM to {m.display_name} about auto-conversion.")
     market_data["next_conversion_timestamp"] = (
         discord.utils.utcnow() + timedelta(days=7)
     ).isoformat()
@@ -300,7 +304,7 @@ async def convert_all() -> int:
 # ────────────────────────── background tasks ───────────────────────
 @tasks.loop(hours=72)
 async def scheduled_price_update():
-    log.info("TASK: Running scheduled price update...")
+    log.info("TASK_PRICE: Running scheduled price update...")
     await bot.change_presence(activity=discord.Game(name="Updating Market Prices...")) 
     simulate_price() 
     await save_data()
@@ -316,48 +320,48 @@ async def scheduled_price_update():
             )
             await channel.send(embed=embed)
         else:
-            log.warning(f"TASK: Announcement channel with ID {ANNOUNCEMENT_CHANNEL_ID} not found.")
+            log.warning(f"TASK_PRICE: Announcement channel with ID {ANNOUNCEMENT_CHANNEL_ID} not found.")
 
 @scheduled_price_update.before_loop
 async def before_scheduled_price_update():
     await bot.wait_until_ready()
-    log.info("TASK: Scheduled price update task waiting for bot to be ready...")
+    log.info("TASK_PRICE: Scheduled price update task waiting for bot to be ready...")
 
 @tasks.loop(minutes=5)
 async def check_investor_roles_task():
-    log.info("TASK: Running periodic investor role check task (can be removed if not needed).")
+    log.info("TASK_INV_ROLE: Running periodic investor role check task (can be removed if not needed).")
 
 @check_investor_roles_task.before_loop
 async def before_check_investor_roles_task():
     await bot.wait_until_ready()
-    log.info("TASK: Scheduled Market Investor role check task waiting for bot to be ready...")
+    log.info("TASK_INV_ROLE: Scheduled Market Investor role check task waiting for bot to be ready...")
 
 @tasks.loop(hours=168)
 async def auto_convert_crypto_to_cash():
-    log.info("TASK: Running scheduled auto crypto to cash conversion...")
+    log.info("TASK_CONVERT: Running scheduled auto crypto to cash conversion...")
     await _perform_crypto_to_cash_conversion()
-    log.info("TASK: Scheduled auto crypto to cash conversion task complete.")
+    log.info("TASK_CONVERT: Scheduled auto crypto to cash conversion task complete.")
 
 @auto_convert_crypto_to_cash.before_loop
 async def before_auto_convert_crypto_to_cash():
     await bot.wait_until_ready()
-    log.info("TASK: Scheduled crypto to cash conversion task waiting for bot to be ready...")
+    log.info("TASK_CONVERT: Scheduled crypto to cash conversion task waiting for bot to be ready...")
 
 @tasks.loop(hours=36)
 async def notify_conversion_countdown():
-    log.info("TASK: Running scheduled conversion countdown notification...")
+    log.info("TASK_COUNTDOWN: Running scheduled conversion countdown notification...")
     
     target_guild = None
     if bot.guilds:
         target_guild = bot.guilds[0]
     if target_guild is None:
-        log.warning("TASK: Bot is not in any guild. Cannot send conversion countdown notifications.")
+        log.warning("TASK_COUNTDOWN: Bot is not in any guild. Cannot send conversion countdown notifications.")
         return
 
     if "next_conversion_timestamp" not in market_data or market_data["next_conversion_timestamp"] is None:
         market_data["next_conversion_timestamp"] = (discord.utils.utcnow() + timedelta(days=7)).isoformat()
         await save_data()
-        log.info("TASK: Initialized next_conversion_timestamp as it was missing.")
+        log.info("TASK_COUNTDOWN: Initialized next_conversion_timestamp as it was missing.")
     
     next_conversion_dt = datetime.datetime.fromisoformat(market_data["next_conversion_timestamp"])
     time_left = next_conversion_dt - discord.utils.utcnow()
@@ -399,16 +403,16 @@ async def notify_conversion_countdown():
         if full_notification_message:
             try:
                 await member.send(full_notification_message)
-                log.info(f"TASK: Sent conversion countdown DM to {member.display_name}.")
+                log.info(f"TASK_COUNTDOWN: Sent conversion countdown DM to {member.display_name}.")
             except discord.Forbidden:
-                log.warning(f"TASK: Could not send conversion countdown DM to {member.display_name}. DMs might be disabled.")
+                log.warning(f"TASK_COUNTDOWN: Could not send conversion countdown DM to {member.display_name}. DMs might be disabled.")
             except Exception as e:
-                log.error(f"TASK: Error sending conversion countdown DM to {member.display_name}: {e}")
+                log.error(f"TASK_COUNTDOWN: Error sending conversion countdown DM to {member.display_name}: {e}")
 
 @notify_conversion_countdown.before_loop
 async def before_notify_conversion_countdown():
     await bot.wait_until_ready()
-    log.info("TASK: Scheduled conversion countdown notification task waiting for bot to be ready...")
+    log.info("TASK_COUNTDOWN: Scheduled conversion countdown notification task waiting for bot to be ready...")
 
 # ────────────────────────── UI: Tickets / Verify ───────────────────
 class OpenTicketButton(discord.ui.Button):
@@ -453,7 +457,7 @@ class OpenTicketButton(discord.ui.Button):
                 "status": "open",
                 "created_at": discord.utils.utcnow().isoformat()
             }
-            await save_data() # Use await save_data() here
+            await save_data()
 
             ticket_embed = discord.Embed(
                 title=f"New Ticket for {interaction.user.display_name}",
@@ -514,7 +518,7 @@ class VerificationModal(ui.Modal, title='Project New Campton Verification'):
         user_data["verification"]["roblox_username"] = str(self.roblox_username)
         user_data["verification"]["pnc_full_name"] = str(self.pnc_full_name)
         user_data["verification"]["verified_at"] = discord.utils.utcnow().isoformat()
-        await save_data() # Use await save_data() here
+        await save_data()
 
         try:
             if new_arrival_role in member.roles:
@@ -613,6 +617,7 @@ async def on_ready():
     
     # 3. Ensure initial market data for coins is set up correctly after loading
     if CAMPTOM_COIN_NAME not in market_data["coins"] or len(market_data["coins"]) != len(CRYPTO_NAMES): 
+        log.info(f"BOT_READY: Initializing/re-initializing coin data for {CAMPTOM_COIN_NAME}.")
         market_data["coins"] = {}
         for name in CRYPTO_NAMES: 
             market_data["coins"][name] = {"price": INITIAL_PRICE}
@@ -733,7 +738,7 @@ async def buy(interaction: discord.Interaction, amount_of_cash: float):
     if '.' in s_cash:
         decimal_part_cash = s_cash.split('.')[1]
         if len(decimal_part_cash) > 2 and amount_of_cash * 100 != int(amount_of_cash * 100):
-            await interaction.followup.send("You can only spend cash with up to 2 decimal places (e.00).", ephemeral=True)
+            await interaction.followup.send("You can only spend cash with up to 2 decimal places (e.g., 50.00).", ephemeral=True)
             return
     
     current_coin_price = price() 
@@ -922,7 +927,7 @@ async def transfer(interaction: discord.Interaction, recipient: discord.Member, 
         await interaction.followup.send("You must transfer a positive amount.", ephemeral=True)
         return
 
-    if currency_type.value == 'campton_coin' and has_more_than_three_decimals(amount):
+    if currency_type.value == 'campton_coin' and too_many_decimals(Decimal(str(amount)), 3):
         await interaction.followup.send("You can only transfer Campton Coin with up to 3 decimal places (e.g., 0.123).", ephemeral=True)
         return
 
@@ -1066,7 +1071,7 @@ async def close(interaction: discord.Interaction):
 
         ticket_info["status"] = "closed"
         ticket_info["closed_at"] = discord.utils.utcnow().isoformat()
-        await save_data() # Use await save_data() here
+        await save_data()
 
         await interaction.channel.send("Ticket closed. This channel will be deleted shortly.")
         
@@ -1103,16 +1108,16 @@ async def clearmessages(interaction: discord.Interaction, amount: int):
     try:
         deleted = await interaction.channel.purge(limit=amount)
         await interaction.followup.send(f"Successfully cleared {len(deleted)} messages.", ephemeral=True)
-        log.info(f"INFO: Cleared {len(deleted)} messages in #{interaction.channel.name} by {interaction.user.display_name}.")
+        log.info(f"CMD_CLEAR: Cleared {len(deleted)} messages in #{interaction.channel.name} by {interaction.user.display_name}.")
     except discord.Forbidden:
         await interaction.followup.send(
             "I do not have permission to manage messages in this channel. Please ensure I have 'Manage Messages' permission.",
             ephemeral=True
         )
-        log.error(f"ERROR: Bot lacks 'Manage Messages' permission in #{interaction.channel.name} for clearmessages.")
+        log.error(f"CMD_CLEAR: Bot lacks 'Manage Messages' permission in #{interaction.channel.name}.")
     except Exception as e:
         await interaction.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
-        log.error(f"ERROR: Error clearing messages in #{interaction.channel.name}: {e}")
+        log.error(f"CMD_CLEAR: Error clearing messages in #{interaction.channel.name}: {e}")
 
 @clearmessages.error
 async def clearmessages_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -1145,16 +1150,16 @@ async def lockdown(interaction: discord.Interaction, channel: discord.TextChanne
         await target_channel.set_permissions(interaction.guild.default_role, send_messages=False)
         await target_channel.send(f"🔒 This channel has been locked down by {interaction.user.mention}. Only staff can send messages.")
         await interaction.followup.send(f"Successfully locked down {target_channel.mention}.", ephemeral=True)
-        log.info(f"INFO: Locked down #{target_channel.name} by {interaction.user.display_name}.")
+        log.info(f"CMD_LOCK: Locked down #{target_channel.name} by {interaction.user.display_name}.")
     except discord.Forbidden:
         await interaction.followup.send(
             "I do not have permission to manage channels. Please ensure I have 'Manage Channels' permission and my role is higher than `@everyone`.",
             ephemeral=True
         )
-        log.error(f"ERROR: Bot lacks 'Manage Channels' permission to lockdown #{target_channel.name}.")
+        log.error(f"CMD_LOCK: Bot lacks 'Manage Channels' permission to lockdown #{target_channel.name}.")
     except Exception as e:
         await interaction.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
-        log.error(f"ERROR: Error locking down #{target_channel.name}: {e}")
+        log.error(f"CMD_LOCK: Error locking down #{target_channel.name}: {e}")
 
 @lockdown.error
 async def lockdown_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -1185,16 +1190,16 @@ async def unlock(interaction: discord.Interaction, channel: discord.TextChannel 
         await target_channel.set_permissions(interaction.guild.default_role, send_messages=None)
         await target_channel.send(f"🔓 This channel has been unlocked by {interaction.user.mention}. Members can now send messages.")
         await interaction.followup.send(f"Successfully unlocked {target_channel.mention}.", ephemeral=True)
-        log.info(f"INFO: Unlocked #{target_channel.name} by {interaction.user.display_name}.")
+        log.info(f"CMD_UNLOCK: Unlocked #{target_channel.name} by {interaction.user.display_name}.")
     except discord.Forbidden:
         await interaction.followup.send(
             "I do not have permission to manage channels. Please ensure I have 'Manage Channels' permission and my role is higher than `@everyone`.",
             ephemeral=True
         )
-        log.error(f"ERROR: Bot lacks 'Manage Channels' permission to unlock #{target_channel.name}.")
+        log.error(f"CMD_UNLOCK: Bot lacks 'Manage Channels' permission to unlock #{target_channel.name}.")
     except Exception as e:
         await interaction.followup.send(f"An unexpected error occurred: {e}", ephemeral=True)
-        log.error(f"ERROR: Error unlocking #{target_channel.name}: {e}")
+        log.error(f"CMD_UNLOCK: Error unlocking #{target_channel.name}: {e}")
 
 @unlock.error
 async def unlock_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -1213,7 +1218,7 @@ async def unlock_error(interaction: discord.Interaction, error: app_commands.App
 @app_commands.check(is_bot_owner_slash)
 async def manual_convert(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    log.info(f"INFO: Manual crypto to cash conversion triggered by {interaction.user.display_name} ({interaction.user.id}).")
+    log.info(f"CMD_MANUALCONVERT: Manual crypto to cash conversion triggered by {interaction.user.display_name} ({interaction.user.id}).")
     
     converted_count = await _perform_crypto_to_cash_conversion()
     
@@ -1247,10 +1252,10 @@ async def set_price_cmd(interaction: discord.Interaction, amount: float):
     new_price = round(amount, 2)
 
     market_data["coins"][CAMPTOM_COIN_NAME]["price"] = new_price
-    await save_data() # Use await save_data() here
+    await save_data()
 
     await interaction.followup.send(f"✅ Campton Coin price has been manually set to **{new_price:.2f} dollars**.", ephemeral=True)
-    log.info(f"INFO: Campton Coin price manually set to {new_price:.2f} by {interaction.user.display_name}.")
+    log.info(f"CMD_SETPRICE: Campton Coin price manually set to {new_price:.2f} by {interaction.user.display_name}.")
 
 @set_price_cmd.error
 async def set_price_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -1268,12 +1273,12 @@ async def set_price_error(interaction: discord.Interaction, error: app_commands.
 async def save_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
-        await save_data() # Use await save_data() here
+        await save_data()
         await interaction.followup.send("✅ Market data saved (local & Discord backup attempted). Check logs for details.", ephemeral=True)
-        log.info(f"INFO: Manual save triggered by {interaction.user.display_name}. Discord backup attempted.")
+        log.info(f"CMD_SAVE: Manual save triggered by {interaction.user.display_name}. Discord backup attempted.")
     except Exception as e:
         await interaction.followup.send(f"❌ Error during save: {e}", ephemeral=True)
-        log.error(f"ERROR: Manual save failed: {e}")
+        log.error(f"CMD_SAVE: Manual save failed: {e}")
 
 @save_cmd.error
 async def save_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -1294,10 +1299,10 @@ async def announce(interaction: discord.Interaction, message: str):
     try:
         await interaction.channel.send(message)
         await interaction.followup.send("✅ Announcement sent.", ephemeral=True)
-        log.info(f"INFO: Announcement sent by {interaction.user.display_name}: {message}")
+        log.info(f"CMD_ANNOUNCE: Announcement sent by {interaction.user.display_name}: {message}")
     except Exception as e:
         await interaction.followup.send(f"❌ Error sending announcement: {e}", ephemeral=True)
-        log.error(f"ERROR: Error sending announcement: {e}")
+        log.error(f"CMD_ANNOUNCE: Error sending announcement: {e}")
 
 @announce.error
 async def announce_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -1343,10 +1348,10 @@ async def dated_announce(
         await interaction.channel.send(full_announcement)
         
         await interaction.followup.send(f"✅ Dated announcement sent: {full_announcement}", ephemeral=True)
-        log.info(f"INFO: Dated announcement sent by {interaction.user.display_name}: {full_announcement}")
+        log.info(f"CMD_DATEDANNOUNCE: Dated announcement sent by {interaction.user.display_name}: {full_announcement}")
     except Exception as e:
         await interaction.followup.send(f"❌ Error sending dated announcement: {e}", ephemeral=True)
-        log.error(f"ERROR: Error sending dated announcement: {e}")
+        log.error(f"CMD_DATEDANNOUNCE: Error sending dated announcement: {e}")
 
 @dated_announce.error
 async def dated_announce_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
