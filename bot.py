@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 import logging
 from decimal import Decimal, ROUND_DOWN
-from typing import Any # Dict is not needed if using 'dict' for type hints
+from typing import Any
 
 # ────────────────────────── logging ────────────────────────────────
 log = logging.getLogger("campton_bot")
@@ -56,9 +56,9 @@ if not TOKEN:
     log.critical("DISCORD_BOT_TOKEN environment variable not found. Bot cannot start.")
     raise SystemExit(1)
 
-# ────────────────────────── constants ──────────────────────────────
+# ────────────────────────── constants (DEFINED AT TOP) ──────────────────────────────
 PREFIX    = "!"
-DATA_FILE = Path("stock_market_data.json")
+DATA_FILE = Path("stock_market_data.json") # Local, ephemeral file path
 CAMPTOM_COIN_NAME = "Campton Coin" 
 
 MIN_PRICE, MAX_PRICE      = 50.00, 230.00
@@ -86,7 +86,7 @@ async def is_bot_owner_slash(interaction: discord.Interaction) -> bool:
 
 # ────────────────────────── data i/o (Discord backup) ──────────────
 save_lock = asyncio.Lock()
-backup_channel_global: discord.TextChannel | None = None
+backup_channel_global: discord.TextChannel | None = None # Global to store the fetched channel
 
 def _ensure_data_dir_exists():
     if not DATA_FILE.parent.exists():
@@ -132,7 +132,7 @@ async def save_data():
             log.warning("SAVE_DATA_CALL: BACKUP_CHANNEL_ID not set in environment. Discord backup skipped.")
             return
         
-        ch = backup_channel_global
+        ch = backup_channel_global # Use the globally stored channel object
         if not ch:
             log.warning(f"SAVE_DATA_CALL: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Discord backup skipped.")
             return
@@ -188,7 +188,7 @@ async def load_data_from_discord():
                 loaded = json.loads(data)
                 market_data.update(loaded)
                 log.info(f"LOAD_DATA_CALL: Loaded data from Discord backup message {msg.id}.")
-                return
+                return # Successfully loaded, exit
         log.info("LOAD_DATA_CALL: No Discord backup found; using local/default data.")
     except discord.Forbidden:
         log.error(f"LOAD_DATA_CALL: Discord load failed due to permissions in channel {ch.name} ({ch.id}). "
@@ -271,8 +271,6 @@ def update_prices():
     for user_id_str in market_data["users"]:
         market_data["users"][user_id_str]["on_buy_cooldown"] = False
     
-    # Do not call await save_data() here, as this is a sync function.
-    # The calling task (scheduled_price_update) will call save_data()
     log.info("INFO: Market prices updated and buy cooldown cleared (in sync update_prices).")
 
 def get_user_data(user_id): # This is a legacy function, get_user is preferred
@@ -301,7 +299,6 @@ def buy_coin_logic(user_id, coin_name, quantity_of_coins_to_buy):
 
     user["balance"] -= cost
     user["portfolio"][coin_name] = user["portfolio"].get(coin_name, 0.0) + quantity_of_coins_to_buy
-    # Do not call await save_data() here. The calling command will.
     return f"Successfully bought {quantity_of_coins_to_buy:.3f} {coin_name}(s) for {cost:.2f} dollars."
 
 def sell_coin_logic(user_id, coin_name, quantity):
@@ -318,7 +315,6 @@ def sell_coin_logic(user_id, coin_name, quantity):
     user["portfolio"][coin_name] -= quantity
     if user["portfolio"][coin_name] <= 0.0001: 
         del user["portfolio"][coin_name]
-    # Do not call await save_data() here. The calling command will.
     return f"Successfully sold {quantity:.3f} {coin_name}(s) for {revenue:.2f} dollars."
 
 async def _perform_crypto_to_cash_conversion():
@@ -379,8 +375,8 @@ async def _perform_crypto_to_cash_conversion():
 async def scheduled_price_update():
     log.info("TASK_PRICE: Running scheduled price update...")
     await bot.change_presence(activity=discord.Game(name="Updating Market Prices...")) 
-    update_prices() # Sync function
-    await save_data() # Save after price update
+    update_prices() # Sync function, modifies market_data
+    await save_data() # <--- ADDED: Save after price update
     await bot.change_presence(activity=discord.Game(name="Campton Stocks RP")) 
     if ANNOUNCEMENT_CHANNEL_ID:
         channel = bot.get_channel(ANNOUNCEMENT_CHANNEL_ID)
@@ -403,39 +399,38 @@ async def before_scheduled_price_update():
 @tasks.loop(minutes=5)
 async def check_investor_roles_task():
     log.info("TASK_INV_ROLE: Running periodic investor role check task (can be removed if not needed).")
-    # This task is now lighter as `check_and_assign_investor_role` is called on transactions
-    # If you want a full sweep here, iterate guild.members and call check_and_assign_investor_role
-    # For now, it just logs its run.
-    target_guild = None
-    if bot.guilds:
-        target_guild = bot.guilds[0]
-
-    if target_guild is None:
-        log.warning(f"TASK_INV_ROLE: Bot is not in any guild. Cannot perform investor role checks.")
-        return
-
-    # If you want a full sweep, uncomment this:
-    # for member in target_guild.members:
-    #     if not member.bot:
-    #         check_and_assign_investor_role(member.id, target_guild)
-
 
 @check_investor_roles_task.before_loop
 async def before_check_investor_roles_task():
     await bot.wait_until_ready()
     log.info("TASK_INV_ROLE: Scheduled Market Investor role check task waiting for bot to be ready...")
 
-@tasks.loop(hours=168)
+@tasks.loop(hours=168) # Runs every 7 days (168 hours)
 async def auto_convert_crypto_to_cash():
-    log.info("TASK_CONVERT: Running scheduled auto crypto to cash conversion...")
-    await _perform_crypto_to_cash_conversion()
-    log.info("TASK_CONVERT: Scheduled auto crypto to cash conversion task complete.")
+    log.info("TASK_CONVERT_SCHEDULED: Running scheduled auto crypto to cash conversion check...")
+    
+    # Check if conversion time has passed
+    next_conversion_dt = datetime.datetime.fromisoformat(market_data["next_conversion_timestamp"])
+    if discord.utils.utcnow() >= next_conversion_dt:
+        log.info("TASK_CONVERT_SCHEDULED: Conversion time reached. Initiating conversion.")
+        await _perform_crypto_to_cash_conversion()
+    else:
+        time_left = next_conversion_dt - discord.utils.utcnow()
+        days, rem_seconds = divmod(int(time_left.total_seconds()), 86400)
+        hours = rem_seconds // 3600
+        log.info(f"TASK_CONVERT_SCHEDULED: Next conversion at {next_conversion_dt.isoformat()} (in {days}d {hours}h). Skipping for now.")
+
 
 @auto_convert_crypto_to_cash.before_loop
 async def before_auto_convert_crypto_to_cash():
     await bot.wait_until_ready()
-    log.info("TASK_CONVERT: Scheduled crypto to cash conversion task waiting for bot to be ready...")
-
+    log.info("TASK_CONVERT_SCHEDULED: Scheduled crypto to cash conversion task waiting for bot to be ready...")
+    # Initialize next_conversion_timestamp if missing or invalid on first startup
+    if "next_conversion_timestamp" not in market_data or market_data["next_conversion_timestamp"] is None:
+        market_data["next_conversion_timestamp"] = (discord.utils.utcnow() + timedelta(days=7)).isoformat()
+        await save_data()
+        log.info("TASK_CONVERT_SCHEDULED: Initialized next_conversion_timestamp as it was missing.")
+    
 @tasks.loop(hours=36)
 async def notify_conversion_countdown():
     log.info("TASK_COUNTDOWN: Running scheduled conversion countdown notification...")
@@ -464,7 +459,7 @@ async def notify_conversion_countdown():
 
     if time_left.total_seconds() < 0:
         notification_message_time = (
-            f"The conversion is **very soon!** (It may be in progress or just completed)."
+            f"The conversion is **very soon!** (It may be in progress or just completed). Wait for the next market price update before buying again."
         )
     else:
         days_left = time_left.days
@@ -596,7 +591,7 @@ class VerificationModal(ui.Modal, title='Project New Campton Verification'):
 
         if not new_arrival_role or not campton_citizen_role:
             await interaction.followup.send("Verification roles are not correctly configured. Please contact server staff.", ephemeral=True)
-            log.error(f"ERROR: Verification roles not found. New Arrival ID: {NEW_ARRIVAL_ROLE_ID}, Citizen ID: {CAMPTOM_CITIZEN_ROLE_ID}")
+            log.error(f"ERROR: Verification roles not found. New Arrival ID: {NEW_ARRIVAL_ROLE_ID}, Citizen ID: {CAMPTON_CITIZEN_ROLE_ID}")
             return
 
         if campton_citizen_role in member.roles:
@@ -753,11 +748,12 @@ async def on_member_join(member: discord.Member):
         log.warning("WARNING: NEW_ARRIVAL_ROLE_ID is not configured, skipping role assignment for new member.")
 
 @bot.tree.command(name='prices', description='Displays the current price of Campton Coin.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- ADDED: Hide from non-admins
 @app_commands.check(is_bot_owner_slash)
 async def prices(interaction: discord.Interaction):
     await interaction.response.defer()
     update_prices() 
+    await save_data() # <--- ADDED: Save after price update
     embed = discord.Embed(title="Current Crypto Market Prices", color=discord.Color.green())
     for coin_name, data in market_data["coins"].items():
         embed.add_field(name=coin_name, value=f"{data['price']:.2f} dollars", inline=True)
@@ -835,6 +831,7 @@ async def buy(interaction: discord.Interaction, amount_of_cash: float):
     result = buy_coin_logic(interaction.user.id, coin_name, float(quantity_of_coins_to_buy)) 
     
     if "Successfully bought" in result:
+        await save_data() # <--- ADDED: Save after successful buy
         await interaction.followup.send(f"Successfully spent {amount_of_cash:.2f} dollars to buy {float(quantity_of_coins_to_buy):.3f} {coin_name}(s). Your new cash balance is {get_user(interaction.user.id)['balance']:.2f} dollars.", ephemeral=True)
         check_and_assign_investor_role(interaction.user.id, interaction.guild)
     else:
@@ -855,11 +852,15 @@ async def sell_cmd(interaction: discord.Interaction, quantity: float):
         return
 
     result = sell_coin_logic(interaction.user.id, coin_name, quantity) 
-    await interaction.followup.send(result, ephemeral=True)
-    check_and_assign_investor_role(interaction.user.id, interaction.guild)
+    if "Successfully sold" in result: # Check if sold successfully
+        await save_data() # <--- ADDED: Save after successful sell
+        await interaction.followup.send(result, ephemeral=True)
+        check_and_assign_investor_role(interaction.user.id, interaction.guild)
+    else:
+        await interaction.followup.send(result, ephemeral=True)
 
 @bot.tree.command(name='addfunds', description='Adds funds to a specified user\'s balance. (Bot Owner Only)')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.describe(member='The user to add funds to.', amount='The amount of funds to add.')
 @app_commands.check(is_bot_owner_slash)
 async def add_funds(interaction: discord.Interaction, member: discord.Member, amount: float):
@@ -875,12 +876,12 @@ async def add_funds(interaction: discord.Interaction, member: discord.Member, am
 
     user_data = get_user(member.id) 
     user_data["balance"] = float(D(str(user_data["balance"])) + Decimal(str(amount))) 
-    await save_data() 
+    await save_data() # <--- Already present
 
     await interaction.followup.send(f"Successfully added {amount:.2f} dollars to {member.display_name}'s balance. Their new balance is {user_data['balance']:.2f} dollars.", ephemeral=True)
 
 @bot.tree.command(name='addcoins', description='(Owner) Add Campton Coin to a member\'s portfolio.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.describe(member='The user to add coins to.', quantity='The number of coins to add.')
 @app_commands.check(is_bot_owner_slash)
 async def addcoins(interaction: discord.Interaction, member: discord.Member, quantity: float):
@@ -900,7 +901,7 @@ async def addcoins(interaction: discord.Interaction, member: discord.Member, qua
 
     user_data = get_user(member.id) 
     user_data["portfolio"][CAMPTOM_COIN_NAME] = float(D(str(user_data["portfolio"].get(CAMPTOM_COIN_NAME, 0.0))) + Decimal(str(quantity))) 
-    await save_data() 
+    await save_data() # <--- Already present
 
     await interaction.followup.send(f"Successfully added {quantity:.3f} {CAMPTOM_COIN_NAME} to {member.display_name}'s portfolio. They now have {user_data['portfolio'][CAMPTOM_COIN_NAME]:.3f} coins.", ephemeral=True)
 
@@ -941,7 +942,7 @@ async def withdraw(interaction: discord.Interaction, amount: float):
             withdrawal_embed.set_footer(text=f"To approve, use /approvewithdrawal {interaction.user.id} {amount}")
 
             await owner.send(embed=withdrawal_embed)
-            await interaction.followup.send(f"Your withdrawal request for {amount:.2f} dollars has been sent to the bot owner for approval. Your balance remains {user_data['balance']:.2f} dollars for now.", ephemeral=True)
+            await interaction.followup.send(f"Your withdrawal request for {amount:.2f} dollars has been sent to the bot owner for approval. Your balance remains {user_data['balance']:.2f} dollars for now. (Funds not deducted yet)", ephemeral=True) # Clarified message
         except discord.Forbidden:
             log.warning(f"WARNING: Could not send DM to owner {owner.name} about withdrawal request. DMs might be disabled.")
             await interaction.followup.send("Could not send the withdrawal request to the bot owner. Please ensure the bot can DM the owner.", ephemeral=True)
@@ -949,7 +950,7 @@ async def withdraw(interaction: discord.Interaction, amount: float):
         await interaction.followup.send("Could not find the bot owner to send the withdrawal request. Please ensure the bot owner is correctly configured.", ephemeral=True)
 
 @bot.tree.command(name='approvewithdrawal', description='Approves a user\'s withdrawal request and deducts funds. (Bot Owner Only)')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.describe(user_id='The ID of the user whose withdrawal to approve.', amount='The Amount to deduct.')
 @app_commands.check(is_bot_owner_slash)
 async def approve_withdrawal(interaction: discord.Interaction, user_id: str, amount: float):
@@ -979,7 +980,7 @@ async def approve_withdrawal(interaction: discord.Interaction, user_id: str, amo
         return
 
     user_data["balance"] = float(D(str(user_data["balance"])) - Decimal(str(amount))) 
-    await save_data() 
+    await save_data() # <--- ADDED: Save after deduction
 
     await interaction.followup.send(f"Successfully approved withdrawal of {amount:.2f} dollars for {target_user.display_name}. Their new balance is {user_data['balance']:.2f} dollars.", ephemeral=True)
 
@@ -1054,7 +1055,7 @@ async def transfer(interaction: discord.Interaction, recipient: discord.Member, 
         feedback_message = "Invalid currency type specified."
 
     if transfer_successful:
-        await save_data() 
+        await save_data() # <--- Already present
         await interaction.followup.send(feedback_message, ephemeral=True)
         if recipient_dm_message:
             try:
@@ -1071,7 +1072,7 @@ async def transfer(interaction: discord.Interaction, recipient: discord.Member, 
         await interaction.followup.send(feedback_message, ephemeral=True)
 
 @bot.tree.command(name='sendticketbutton', description='(Owner Only) Sends the "Open Ticket" button to the current channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.check(is_bot_owner_slash)
 async def send_ticket_button(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -1098,7 +1099,7 @@ async def send_ticket_button_error(interaction: discord.Interaction, error: app_
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='sendverifybutton', description='(Owner Only) Sends the "Verify" button to the current channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.check(is_bot_owner_slash)
 async def send_verify_button(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -1178,7 +1179,7 @@ async def close(interaction: discord.Interaction):
     await interaction.followup.send("Are you sure you want to close this ticket?", view=confirm_view, ephemeral=True)
 
 @bot.tree.command(name='clearmessages', description='(Owner Only) Clears a specified number of messages from the current channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.describe(amount='The number of messages to clear (1-100).')
 @app_commands.check(is_bot_owner_slash)
 async def clearmessages(interaction: discord.Interaction, amount: int):
@@ -1217,7 +1218,7 @@ async def clearmessages_error(interaction: discord.Interaction, error: app_comma
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='lockdown', description='(Owner Only) Locks down the current channel or a specified channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.describe(channel='The channel to lock down (defaults to current channel).')
 @app_commands.check(is_bot_owner_slash)
 async def lockdown(interaction: discord.Interaction, channel: discord.TextChannel = None):
@@ -1257,7 +1258,7 @@ async def lockdown_error(interaction: discord.Interaction, error: app_commands.A
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='unlock', description='(Owner Only) Unlocks the current channel or a specified channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.describe(channel='The channel to unlock (defaults to current channel).')
 @app_commands.check(is_bot_owner_slash)
 async def unlock(interaction: discord.Interaction, channel: discord.TextChannel = None):
@@ -1297,7 +1298,7 @@ async def unlock_error(interaction: discord.Interaction, error: app_commands.App
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='manualconvert', description='(Owner Only) Manually triggers the crypto to cash conversion for all users.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.check(is_bot_owner_slash)
 async def manual_convert(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -1318,7 +1319,7 @@ async def manual_convert_error(interaction: discord.Interaction, error: app_comm
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='setprice', description='(Owner) Manually set the price of Campton Coin.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.describe(amount='The new price for Campton Coin (e.g., 150.75).')
 @app_commands.check(is_bot_owner_slash)
 async def set_price_cmd(interaction: discord.Interaction, amount: float):
@@ -1335,7 +1336,7 @@ async def set_price_cmd(interaction: discord.Interaction, amount: float):
     new_price = round(amount, 2)
 
     market_data["coins"][CAMPTOM_COIN_NAME]["price"] = new_price
-    await save_data()
+    await save_data() # <--- Already present
 
     await interaction.followup.send(f"✅ Campton Coin price has been manually set to **{new_price:.2f} dollars**.", ephemeral=True)
     log.info(f"CMD_SETPRICE: Campton Coin price manually set to {new_price:.2f} by {interaction.user.display_name}.")
@@ -1351,12 +1352,12 @@ async def set_price_error(interaction: discord.Interaction, error: app_commands.
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='save', description='(Owner) Manually save all market data.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.check(is_bot_owner_slash)
 async def save_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
-        await save_data()
+        await save_data() # <--- Already present
         await interaction.followup.send("✅ Market data saved (local & Discord backup attempted). Check logs for details.", ephemeral=True)
         log.info(f"CMD_SAVE: Manual save triggered by {interaction.user.display_name}. Discord backup attempted.")
     except Exception as e:
@@ -1374,7 +1375,7 @@ async def save_error(interaction: discord.Interaction, error: app_commands.AppCo
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='announce', description='(Owner) Make the bot announce something to the channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.describe(message='The message for the bot to announce.')
 @app_commands.check(is_bot_owner_slash)
 async def announce(interaction: discord.Interaction, message: str):
@@ -1398,7 +1399,7 @@ async def announce_error(interaction: discord.Interaction, error: app_commands.A
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='datedannounce', description='(Owner) Make the bot announce something with a date.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) 
 @app_commands.describe(
     message='The message for the bot to announce.',
     day_offset='Optional: Days from now for the date (e.g., 3 for 3 days from now). Defaults to today.',
@@ -1439,7 +1440,7 @@ async def dated_announce(
 @dated_announce.error
 async def dated_announce_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("Only the bot owner can use this.", ephemeral=True)
+        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
     else:
         if interaction.response.is_done():
             await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
