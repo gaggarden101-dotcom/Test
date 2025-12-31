@@ -13,19 +13,22 @@ from pathlib import Path
 import sys
 import logging
 from decimal import Decimal, ROUND_DOWN
-from typing import Any
+from typing import Any # Dict is not needed if using 'dict' for type hints
 
 # ────────────────────────── logging ────────────────────────────────
 log = logging.getLogger("campton_bot")
 log.setLevel(logging.INFO)
+# Remove any default handlers to prevent duplicate output
 if log.handlers:
     for handler in log.handlers:
         log.removeHandler(handler)
+# Create a StreamHandler that writes to sys.stdout
 handler = logging.StreamHandler(sys.stdout)
 formatter = logging.Formatter("[{asctime}] [{levelname:<8}] {name}: {message}", style="{", datefmt="%Y-%m-%d %H:%M:%S")
 handler.setFormatter(formatter)
+# Add the handler to the logger
 log.addHandler(handler)
-
+# Also ensure discord.py messages are visible and go to stdout
 discord_logger = logging.getLogger('discord')
 if discord_logger.handlers:
     for handler in discord_logger.handlers:
@@ -222,7 +225,7 @@ def price() -> Decimal:
     return Decimal(str(market_data["coins"][CAMPTOM_COIN_NAME]["price"]))
 
 def set_price(p: Decimal):
-    market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p)
+    market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p) # Store as float in JSON
 
 def get_user(uid: int) -> dict[str, Any]:
     s = str(uid)
@@ -376,7 +379,7 @@ async def scheduled_price_update():
     log.info("TASK_PRICE: Running scheduled price update...")
     await bot.change_presence(activity=discord.Game(name="Updating Market Prices...")) 
     update_prices() # Sync function, modifies market_data
-    await save_data() # <--- ADDED: Save after price update
+    await save_data() # Save after price update
     await bot.change_presence(activity=discord.Game(name="Campton Stocks RP")) 
     if ANNOUNCEMENT_CHANNEL_ID:
         channel = bot.get_channel(ANNOUNCEMENT_CHANNEL_ID)
@@ -399,6 +402,22 @@ async def before_scheduled_price_update():
 @tasks.loop(minutes=5)
 async def check_investor_roles_task():
     log.info("TASK_INV_ROLE: Running periodic investor role check task (can be removed if not needed).")
+    # This task is now lighter as `check_and_assign_investor_role` is called on transactions
+    # If you want a full sweep here, iterate guild.members and call check_and_assign_investor_role
+    # For now, it just logs its run.
+    target_guild = None
+    if bot.guilds:
+        target_guild = bot.guilds[0]
+
+    if target_guild is None:
+        log.warning(f"TASK_INV_ROLE: Bot is not in any guild. Cannot perform investor role checks.")
+        return
+
+    # If you want a full sweep, uncomment this:
+    # for member in target_guild.members:
+    #     if not member.bot:
+    #         check_and_assign_investor_role(member.id, target_guild)
+
 
 @check_investor_roles_task.before_loop
 async def before_check_investor_roles_task():
@@ -409,11 +428,20 @@ async def before_check_investor_roles_task():
 async def auto_convert_crypto_to_cash():
     log.info("TASK_CONVERT_SCHEDULED: Running scheduled auto crypto to cash conversion check...")
     
-    # Check if conversion time has passed
+    # Initialize next_conversion_timestamp if missing or invalid
+    if "next_conversion_timestamp" not in market_data or market_data["next_conversion_timestamp"] is None:
+        market_data["next_conversion_timestamp"] = (discord.utils.utcnow() + timedelta(days=7)).isoformat()
+        await save_data()
+        log.info("TASK_CONVERT_SCHEDULED: Initialized next_conversion_timestamp as it was missing.")
+        # If it was just initialized, don't convert immediately, wait for next cycle
+        return
+
     next_conversion_dt = datetime.datetime.fromisoformat(market_data["next_conversion_timestamp"])
+    
     if discord.utils.utcnow() >= next_conversion_dt:
         log.info("TASK_CONVERT_SCHEDULED: Conversion time reached. Initiating conversion.")
         await _perform_crypto_to_cash_conversion()
+        # _perform_crypto_to_cash_conversion already updates next_conversion_timestamp and saves.
     else:
         time_left = next_conversion_dt - discord.utils.utcnow()
         days, rem_seconds = divmod(int(time_left.total_seconds()), 86400)
@@ -425,11 +453,6 @@ async def auto_convert_crypto_to_cash():
 async def before_auto_convert_crypto_to_cash():
     await bot.wait_until_ready()
     log.info("TASK_CONVERT_SCHEDULED: Scheduled crypto to cash conversion task waiting for bot to be ready...")
-    # Initialize next_conversion_timestamp if missing or invalid on first startup
-    if "next_conversion_timestamp" not in market_data or market_data["next_conversion_timestamp"] is None:
-        market_data["next_conversion_timestamp"] = (discord.utils.utcnow() + timedelta(days=7)).isoformat()
-        await save_data()
-        log.info("TASK_CONVERT_SCHEDULED: Initialized next_conversion_timestamp as it was missing.")
     
 @tasks.loop(hours=36)
 async def notify_conversion_countdown():
@@ -591,7 +614,7 @@ class VerificationModal(ui.Modal, title='Project New Campton Verification'):
 
         if not new_arrival_role or not campton_citizen_role:
             await interaction.followup.send("Verification roles are not correctly configured. Please contact server staff.", ephemeral=True)
-            log.error(f"ERROR: Verification roles not found. New Arrival ID: {NEW_ARRIVAL_ROLE_ID}, Citizen ID: {CAMPTON_CITIZEN_ROLE_ID}")
+            log.error(f"ERROR: Verification roles not found. New Arrival ID: {NEW_ARRIVAL_ROLE_ID}, Citizen ID: {CAMPTOM_CITIZEN_ROLE_ID}")
             return
 
         if campton_citizen_role in member.roles:
@@ -817,7 +840,7 @@ async def buy(interaction: discord.Interaction, amount_of_cash: float):
     if '.' in s_cash:
         decimal_part_cash = s_cash.split('.')[1]
         if len(decimal_part_cash) > 2 and amount_of_cash * 100 != int(amount_of_cash * 100):
-            await interaction.followup.send("You can only spend cash with up to 2 decimal places (e.00).", ephemeral=True)
+            await interaction.followup.send("You can only spend cash with up to 2 decimal places (e.g., 50.00).", ephemeral=True)
             return
     
     current_coin_price = price() 
@@ -1072,7 +1095,7 @@ async def transfer(interaction: discord.Interaction, recipient: discord.Member, 
         await interaction.followup.send(feedback_message, ephemeral=True)
 
 @bot.tree.command(name='sendticketbutton', description='(Owner Only) Sends the "Open Ticket" button to the current channel.')
-@app_commands.default_permissions(manage_guild=False) 
+@app_commands.default_permissions(manage_guild=False) # <--- ADDED: Hide from non-admins
 @app_commands.check(is_bot_owner_slash)
 async def send_ticket_button(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -1099,7 +1122,7 @@ async def send_ticket_button_error(interaction: discord.Interaction, error: app_
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='sendverifybutton', description='(Owner Only) Sends the "Verify" button to the current channel.')
-@app_commands.default_permissions(manage_guild=False) 
+@app_commands.default_permissions(manage_guild=False) # <--- ADDED: Hide from non-admins
 @app_commands.check(is_bot_owner_slash)
 async def send_verify_button(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -1336,9 +1359,15 @@ async def set_price_cmd(interaction: discord.Interaction, amount: float):
     new_price = round(amount, 2)
 
     market_data["coins"][CAMPTOM_COIN_NAME]["price"] = new_price
-    await save_data() # <--- Already present
+    await save_data()
 
-    await interaction.followup.send(f"✅ Campton Coin price has been manually set to **{new_price:.2f} dollars**.", ephemeral=True)
+    # Send a PUBLIC message to the channel (looks like the bot sent it)
+    public_announcement = f"📈 The Campton Coin price has been manually set to **{new_price:.2f} dollars**."
+    await interaction.channel.send(public_announcement)
+
+    # Send an additional EPHEMERAL confirmation to you, the owner
+    await interaction.followup.send(f"✅ You successfully updated the price to {new_price:.2f}.", ephemeral=True)
+    
     log.info(f"CMD_SETPRICE: Campton Coin price manually set to {new_price:.2f} by {interaction.user.display_name}.")
 
 @set_price_cmd.error
@@ -1357,7 +1386,7 @@ async def set_price_error(interaction: discord.Interaction, error: app_commands.
 async def save_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
-        await save_data() # <--- Already present
+        await save_data()
         await interaction.followup.send("✅ Market data saved (local & Discord backup attempted). Check logs for details.", ephemeral=True)
         log.info(f"CMD_SAVE: Manual save triggered by {interaction.user.display_name}. Discord backup attempted.")
     except Exception as e:
@@ -1440,7 +1469,7 @@ async def dated_announce(
 @dated_announce.error
 async def dated_announce_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
+        await interaction.response.send_message("Only the bot owner can use this.", ephemeral=True)
     else:
         if interaction.response.is_done():
             await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
@@ -1453,7 +1482,6 @@ async def ping(interaction: discord.Interaction):
 
 @bot.tree.command(name='viewprice', description='Displays the current price of Campton Coin for everyone.')
 async def view_price_public_cmd(interaction: discord.Interaction):
-    """Displays the current price of Campton Coin for anyone to see."""
     await interaction.response.defer(ephemeral=False) # ephemeral=False makes it visible to everyone
     current_coin_price = market_data["coins"][CAMPTOM_COIN_NAME]["price"]
     embed = discord.Embed(
@@ -1463,7 +1491,6 @@ async def view_price_public_cmd(interaction: discord.Interaction):
     )
     await interaction.followup.send(embed=embed)
 
-# --- (The rest of your existing commands would follow here) ---
 
 # This bot.py file is designed to be run via main.py, which starts the bot.
 bot.run(TOKEN)
