@@ -48,12 +48,9 @@ BACKUP_CHANNEL_ID         = env_int("BACKUP_CHANNEL_ID")
 NEW_ARRIVAL_ROLE_ID       = env_int("NEW_ARRIVAL_ROLE_ID")
 CAMPTON_CITIZEN_ROLE_ID   = env_int("CAMPTON_CITIZEN_ROLE_ID")
 MARKET_INVESTOR_ROLE_ID   = env_int("MARKET_INVESTOR_ROLE_ID")
-# CO_OWNER_ROLE_ID removed
 
 bot_owner_id_env = os.environ.get('OWNER_ID')
 OWNER_ID = int(bot_owner_id_env) if bot_owner_id_env and bot_owner_id_env.isdigit() else 0
-
-# CO_OWNER_IDS removed
 
 if not TOKEN:
     log.critical("DISCORD_BOT_TOKEN environment variable not found. Bot cannot start.")
@@ -61,7 +58,7 @@ if not TOKEN:
 
 # ────────────────────────── constants (DEFINED AT TOP) ──────────────────────────────
 PREFIX    = "!"
-DATA_FILE = Path("stock_market_data.json") # Local, ephemeral file path
+DATA_FILE = Path("stock_market_data.json")
 CAMPTOM_COIN_NAME = "Campton Coin" 
 
 MIN_PRICE, MAX_PRICE      = 50.00, 230.00
@@ -84,29 +81,11 @@ def too_many_decimals(x: Decimal, p: int) -> bool:
         return len(decimal_part) > p
     return False
 
-# ────────────────────────── Permission Checks (Primary Owner Only) ──────────────────────────
-async def is_primary_owner(user_id: int) -> bool:
-    """Check if the user is the PRIMARY bot owner."""
-    return user_id == OWNER_ID
-
-async def is_admin(user_id: int) -> bool:
-    """Check if the user is in the list of authorized admin IDs."""
-    # This list will contain OWNER_ID and any specific co-owner IDs you provide
-    ADMIN_IDS_LIST = [OWNER_ID, 244214611400851458, 1321335530364993608] 
-    return user_id in ADMIN_IDS_LIST
-
-# Slash command checks
 async def is_bot_owner_slash(interaction: discord.Interaction) -> bool:
-    return await is_primary_owner(interaction.user.id)
+    return interaction.user.id == OWNER_ID
 
-async def is_admin_slash(interaction: discord.Interaction) -> bool:
-    return await is_admin(interaction.user.id)
-
-# Prefix command checks
 def is_primary_owner_prefix(ctx: commands.Context) -> bool:
     return ctx.author.id == OWNER_ID
-
-# is_admin_prefix removed as it's not used in this configuration
 
 # ────────────────────────── data i/o (Discord backup) ──────────────
 save_lock = asyncio.Lock()
@@ -953,7 +932,7 @@ async def add_funds(interaction: discord.Interaction, member: discord.Member, am
 
     await interaction.followup.send(f"Successfully added {amount:.2f} dollars to {member.display_name}'s balance. Their new balance is {user_data['balance']:.2f} dollars.", ephemeral=True)
 
-@add_funds.error # Corrected error handler name
+@add_funds.error
 async def add_funds_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
         await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
@@ -1034,7 +1013,7 @@ async def withdraw(interaction: discord.Interaction, amount: float):
 @bot.tree.command(name='approvewithdrawal', description='(Admin Only) Approves a user\'s withdrawal request and deducts funds.')
 @app_commands.check(is_admin_slash) # <--- Admin check
 @app_commands.describe(user_id='The ID of the user whose withdrawal to approve.', amount='The Amount to deduct.')
-async def approve_withdrawal(interaction: discord.Interaction, user_id: str, amount: float):
+async def approve_withdrawal_cmd(interaction: discord.Interaction, user_id: str, amount: float): # Renamed to approve_withdrawal_cmd
     await interaction.response.defer(ephemeral=True)
 
     if not await is_admin_slash(interaction):
@@ -1075,7 +1054,7 @@ async def approve_withdrawal(interaction: discord.Interaction, user_id: str, amo
     except discord.Forbidden:
         log.warning(f"WARNING: Could not send DM to user {target_user.name} about approved withdrawal. DMs might be disabled.")
 
-@approvewithdrawal.error
+@approve_withdrawal_cmd.error # Error handler decorator name corrected
 async def approve_withdrawal_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
         await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
@@ -1176,7 +1155,7 @@ async def close(interaction: discord.Interaction):
 
     ticket_info = market_data["tickets"][str(interaction.channel.id)]
     
-    if interaction.user.id != ticket_info["user_id"] and interaction.user.id != OWNER_ID:
+    if interaction.user.id != ticket_info["user_id"] and interaction.user.id != OWNER_ID: # Only ticket creator OR primary owner can close
         await interaction.followup.send("You must be the ticket creator or the bot owner to close this ticket.", ephemeral=True)
         return
 
@@ -1186,7 +1165,7 @@ async def close(interaction: discord.Interaction):
     async def confirm_callback(button_interaction: discord.Interaction):
         await button_interaction.response.defer(ephemeral=True)
 
-        if button_interaction.user.id != interaction.user.id and button_interaction.user.id != OWNER_ID:
+        if button_interaction.user.id != interaction.user.id and button_interaction.user.id != OWNER_ID: # Only ticket creator OR primary owner can confirm
             await button_interaction.followup.send("Only the person who initiated the close or the bot owner can confirm.", ephemeral=True)
             return
 
@@ -1355,40 +1334,6 @@ async def manual_convert_error(interaction: discord.Interaction, error: app_comm
         else:
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
-@bot.tree.command(name='setprice', description='(Owner Only) Manually set the price of Campton Coin.')
-@app_commands.default_permissions(manage_guild=False) # <--- ADDED: Hide from non-admins
-@app_commands.check(is_bot_owner_slash)
-async def set_price_slash_cmd(interaction: discord.Interaction, amount: float):
-    await interaction.response.defer(ephemeral=True)
-
-    if amount <= 0:
-        await interaction.followup.send("The price must be a positive number.", ephemeral=True)
-        return
-
-    if amount < MIN_PRICE or amount > MAX_PRICE:
-        await interaction.followup.send(f"The price must be between {MIN_PRICE:.2f} and {MAX_PRICE:.2f} dollars.", ephemeral=True)
-        return
-    
-    new_price = round(amount, 2)
-    set_price_in_data(Decimal(str(new_price)))
-    await save_data()
-
-    public_announcement = f"📈 The Campton Coin price has been manually set to **{new_price:.2f} dollars**."
-    await interaction.channel.send(public_announcement)
-
-    await interaction.followup.send(f"✅ You successfully updated the price to {new_price:.2f}.", ephemeral=True)
-    log.info(f"CMD_SETPRICE_SLASH: Campton Coin price manually set to {new_price:.2f} by {interaction.user.display_name}.")
-
-@set_price_slash_cmd.error
-async def set_price_slash_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
-    else:
-        if interaction.response.is_done():
-            await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
-
 @bot.tree.command(name='save', description='(Admin Only) Manually save all market data.')
 @app_commands.check(is_admin_slash)
 async def save_slash_cmd(interaction: discord.Interaction):
@@ -1467,7 +1412,7 @@ async def dated_announce_slash_cmd(interaction: discord.Interaction, message: st
         await interaction.followup.send(f"❌ Error sending dated announcement: {e}", ephemeral=True)
         log.error(f"CMD_DATEDANNOUNCE_SLASH: Error sending dated announcement: {e}")
 
-@dated_announce_slash_error
+@dated_announce_slash_cmd.error
 async def dated_announce_slash_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
         await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
