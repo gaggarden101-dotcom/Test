@@ -81,14 +81,13 @@ def too_many_decimals(x: Decimal, p: int) -> bool:
         return len(decimal_part) > p
     return False
 
-# ────────────────────────── Permission Checks (MOVED TO HERE) ──────────────────────────
+# ────────────────────────── Permission Checks ──────────────────────────
 async def is_primary_owner(user_id: int) -> bool:
     """Check if the user is the PRIMARY bot owner."""
     return user_id == OWNER_ID
 
 async def is_admin(user_id: int) -> bool:
     """Check if the user is in the list of authorized admin IDs."""
-    # This list will contain OWNER_ID and any specific co-owner IDs you provide
     ADMIN_IDS_LIST = [OWNER_ID, 244214611400851458, 1321335530364993608] 
     return user_id in ADMIN_IDS_LIST
 
@@ -151,7 +150,7 @@ async def save_data():
             log.warning("SAVE_DATA_CALL: BACKUP_CHANNEL_ID not set in environment. Discord backup skipped.")
             return
         
-        ch = backup_channel_global # Use the globally stored channel object
+        ch = backup_channel_global
         if not ch:
             log.warning(f"SAVE_DATA_CALL: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Discord backup skipped.")
             return
@@ -236,7 +235,7 @@ def guild() -> discord.Guild | None:
 def price() -> Decimal:
     return Decimal(str(market_data["coins"][CAMPTOM_COIN_NAME]["price"]))
 
-def set_price_in_data(p: Decimal): # Renamed helper to avoid conflict with command
+def set_price_in_data(p: Decimal):
     market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p)
 
 def get_user(uid: int) -> dict[str, Any]:
@@ -391,7 +390,7 @@ async def _perform_crypto_to_cash_conversion():
 async def scheduled_price_update():
     log.info("TASK_PRICE: Running scheduled price update...")
     await bot.change_presence(activity=discord.Game(name="Updating Market Prices...")) 
-    update_prices_logic() 
+    update_prices_logic()
     await save_data() 
     await bot.change_presence(activity=discord.Game(name="Campton Stocks RP")) 
     if ANNOUNCEMENT_CHANNEL_ID:
@@ -948,7 +947,7 @@ async def add_funds(interaction: discord.Interaction, member: discord.Member, am
 
     await interaction.followup.send(f"Successfully added {amount:.2f} dollars to {member.display_name}'s balance. Their new balance is {user_data['balance']:.2f} dollars.", ephemeral=True)
 
-@add_funds.error # Corrected error handler name
+@add_funds.error
 async def add_funds_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
         await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
@@ -1171,6 +1170,7 @@ async def close(interaction: discord.Interaction):
 
     ticket_info = market_data["tickets"][str(interaction.channel.id)]
     
+    # Only ticket creator OR primary owner can close
     if interaction.user.id != ticket_info["user_id"] and interaction.user.id != OWNER_ID:
         await interaction.followup.send("You must be the ticket creator or the bot owner to close this ticket.", ephemeral=True)
         return
@@ -1210,12 +1210,15 @@ async def close(interaction: discord.Interaction):
 
     await interaction.followup.send("Are you sure you want to close this ticket?", view=confirm_view, ephemeral=True)
 
-@bot.tree.command(name='clearmessages', description='(Owner Only) Clears a specified number of messages from the current channel.')
-@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
+@bot.tree.command(name='clearmessages', description='(Admin Only) Clears a specified number of messages from the current channel.')
+@app_commands.check(is_admin_slash)
 @app_commands.describe(amount='The number of messages to clear (1-100).')
-@app_commands.check(is_bot_owner_slash)
 async def clearmessages(interaction: discord.Interaction, amount: int):
     await interaction.response.defer(ephemeral=True)
+
+    if not await is_admin_slash(interaction):
+        await interaction.followup.send("You must be an authorized admin to use this command.", ephemeral=True)
+        return
 
     if not (1 <= amount <= 100):
         await interaction.followup.send("You can only clear between 1 and 100 messages.", ephemeral=True)
@@ -1238,7 +1241,7 @@ async def clearmessages(interaction: discord.Interaction, amount: int):
 @clearmessages.error
 async def clearmessages_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
+        await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
     elif isinstance(error, app_commands.MissingRequiredArgument):
         await interaction.response.send_message("Missing arguments. Usage: `/clearmessages <amount>`", ephemeral=True)
     elif isinstance(error, app_commands.BadArgument):
@@ -1249,10 +1252,9 @@ async def clearmessages_error(interaction: discord.Interaction, error: app_comma
         else:
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
-@bot.tree.command(name='lockdown', description='(Owner Only) Locks down the current channel or a specified channel.')
-@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
+@bot.tree.command(name='lockdown', description='(Admin Only) Locks down the current channel or a specified channel.')
+@app_commands.check(is_admin_slash)
 @app_commands.describe(channel='The channel to lock down (defaults to current channel).')
-@app_commands.check(is_bot_owner_slash)
 async def lockdown(interaction: discord.Interaction, channel: discord.TextChannel = None):
     await interaction.response.defer(ephemeral=True)
     target_channel = channel or interaction.channel
@@ -1280,7 +1282,7 @@ async def lockdown(interaction: discord.Interaction, channel: discord.TextChanne
 @lockdown.error
 async def lockdown_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
+        await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
     elif isinstance(error, app_commands.BadArgument):
         await interaction.response.send_message("Invalid channel provided. Please mention a valid text channel.", ephemeral=True)
     else:
@@ -1289,10 +1291,9 @@ async def lockdown_error(interaction: discord.Interaction, error: app_commands.A
         else:
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
-@bot.tree.command(name='unlock', description='(Owner Only) Unlocks the current channel or a specified channel.')
-@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
+@bot.tree.command(name='unlock', description='(Admin Only) Unlocks the current channel or a specified channel.')
+@app_commands.check(is_admin_slash)
 @app_commands.describe(channel='The channel to unlock (defaults to current channel).')
-@app_commands.check(is_bot_owner_slash)
 async def unlock(interaction: discord.Interaction, channel: discord.TextChannel = None):
     await interaction.response.defer(ephemeral=True)
     target_channel = channel or interaction.channel
@@ -1320,7 +1321,7 @@ async def unlock(interaction: discord.Interaction, channel: discord.TextChannel 
 @unlock.error
 async def unlock_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
+        await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
     elif isinstance(error, app_commands.BadArgument):
         await interaction.response.send_message("Invalid channel provided. Please mention a valid text channel.", ephemeral=True)
     else:
@@ -1329,9 +1330,8 @@ async def unlock_error(interaction: discord.Interaction, error: app_commands.App
         else:
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
-@bot.tree.command(name='manualconvert', description='(Owner Only) Manually triggers the crypto to cash conversion for all users.')
-@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
-@app_commands.check(is_bot_owner_slash) # <--- Only Primary Owner
+@bot.tree.command(name='manualconvert', description='(Admin Only) Manually triggers the crypto to cash conversion for all users.')
+@app_commands.check(is_admin_slash)
 async def manual_convert(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     log.info(f"CMD_MANUALCONVERT: Manual crypto to cash conversion triggered by {interaction.user.display_name} ({interaction.user.id}).")
@@ -1343,50 +1343,15 @@ async def manual_convert(interaction: discord.Interaction):
 @manual_convert.error
 async def manual_convert_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
+        await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
     else:
         if interaction.response.is_done():
             await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
         else:
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
-@bot.tree.command(name='setprice', description='(Owner Only) Manually set the price of Campton Coin.')
-@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
-@app_commands.check(is_bot_owner_slash) # <--- Only Primary Owner
-async def set_price_slash_cmd(interaction: discord.Interaction, amount: float):
-    await interaction.response.defer(ephemeral=True)
-
-    if amount <= 0:
-        await interaction.followup.send("The price must be a positive number.", ephemeral=True)
-        return
-
-    if amount < MIN_PRICE or amount > MAX_PRICE:
-        await interaction.followup.send(f"The price must be between {MIN_PRICE:.2f} and {MAX_PRICE:.2f} dollars.", ephemeral=True)
-        return
-    
-    new_price = round(amount, 2)
-    set_price_in_data(Decimal(str(new_price)))
-    await save_data()
-
-    public_announcement = f"📈 The Campton Coin price has been manually set to **{new_price:.2f} dollars**."
-    await interaction.channel.send(public_announcement)
-
-    await interaction.followup.send(f"✅ You successfully updated the price to {new_price:.2f}.", ephemeral=True)
-    log.info(f"CMD_SETPRICE_SLASH: Campton Coin price manually set to {new_price:.2f} by {interaction.user.display_name}.")
-
-@set_price_slash_cmd.error
-async def set_price_slash_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
-    else:
-        if interaction.response.is_done():
-            await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
-
-@bot.tree.command(name='save', description='(Owner Only) Manually save all market data.')
-@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
-@app_commands.check(is_bot_owner_slash) # <--- Only Primary Owner
+@bot.tree.command(name='save', description='(Admin Only) Manually save all market data.')
+@app_commands.check(is_admin_slash)
 async def save_slash_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
@@ -1400,16 +1365,15 @@ async def save_slash_cmd(interaction: discord.Interaction):
 @save_slash_cmd.error
 async def save_slash_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
+        await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
     else:
         if interaction.response.is_done():
             await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
         else:
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
-@bot.tree.command(name='announce', description='(Owner Only) Make the bot announce something to the channel.')
-@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
-@app_commands.check(is_bot_owner_slash) # <--- Only Primary Owner
+@bot.tree.command(name='announce', description='(Admin Only) Make the bot announce something to the channel.')
+@app_commands.check(is_admin_slash)
 @app_commands.describe(message='The message for the bot to announce.')
 async def announce_slash_cmd(interaction: discord.Interaction, message: str):
     await interaction.response.defer(ephemeral=True)
@@ -1424,16 +1388,15 @@ async def announce_slash_cmd(interaction: discord.Interaction, message: str):
 @announce_slash_cmd.error
 async def announce_slash_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
+        await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
     else:
         if interaction.response.is_done():
             await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
         else:
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
-@bot.tree.command(name='datedannounce', description='(Owner Only) Make the bot announce something with a date.')
-@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
-@app_commands.check(is_bot_owner_slash) # <--- Only Primary Owner
+@bot.tree.command(name='datedannounce', description='(Admin Only) Make the bot announce something with a date.')
+@app_commands.check(is_admin_slash)
 @app_commands.describe(
     message='The message for the bot to announce.',
     day_offset='Optional: Days from now for the date (e.g., 3 for 3 days from now). Defaults to today.',
@@ -1468,7 +1431,7 @@ async def dated_announce_slash_cmd(interaction: discord.Interaction, message: st
 @dated_announce_slash_cmd.error
 async def dated_announce_slash_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You must be the bot owner to use this command.", ephemeral=True)
+        await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
     else:
         if interaction.response.is_done():
             await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
