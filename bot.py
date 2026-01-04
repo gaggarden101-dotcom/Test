@@ -85,16 +85,14 @@ def too_many_decimals(x: Decimal, p: int) -> bool:
     return False
 
 # ────────────────────────── Permission Checks (Primary Owner Only) ──────────────────────────
-# These must be defined before any commands or tasks use them
 async def is_primary_owner(user_id: int) -> bool:
     """Check if the user is the PRIMARY bot owner."""
     return user_id == OWNER_ID
 
 async def is_admin(user_id: int) -> bool:
     """Check if the user is in the list of authorized admin IDs."""
-    # Re-introducing ADMIN_IDS here, as it was removed but needed for this check
     # This list will contain OWNER_ID and any specific co-owner IDs you provide
-    ADMIN_IDS_LIST = [OWNER_ID, 244214611400851458, 1321335530364993608] # <--- Your ID + Co-owners' IDs
+    ADMIN_IDS_LIST = [OWNER_ID, 244214611400851458, 1321335530364993608] 
     return user_id in ADMIN_IDS_LIST
 
 # Slash command checks
@@ -108,8 +106,7 @@ async def is_admin_slash(interaction: discord.Interaction) -> bool:
 def is_primary_owner_prefix(ctx: commands.Context) -> bool:
     return ctx.author.id == OWNER_ID
 
-def is_admin_prefix(ctx: commands.Context) -> bool:
-    return ctx.author.id in [OWNER_ID, 244214611400851458, 1321335530364993608] # <--- Same ADMIN_IDS_LIST for prefix
+# is_admin_prefix removed as it's not used in this configuration
 
 # ────────────────────────── data i/o (Discord backup) ──────────────
 save_lock = asyncio.Lock()
@@ -244,7 +241,7 @@ def guild() -> discord.Guild | None:
 def price() -> Decimal:
     return Decimal(str(market_data["coins"][CAMPTOM_COIN_NAME]["price"]))
 
-def set_price_in_data(p: Decimal): # Renamed helper to avoid conflict with command
+def set_price_in_data(p: Decimal):
     market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p)
 
 def get_user(uid: int) -> dict[str, Any]:
@@ -399,7 +396,7 @@ async def _perform_crypto_to_cash_conversion():
 async def scheduled_price_update():
     log.info("TASK_PRICE: Running scheduled price update...")
     await bot.change_presence(activity=discord.Game(name="Updating Market Prices...")) 
-    update_prices_logic()
+    update_prices_logic() 
     await save_data() 
     await bot.change_presence(activity=discord.Game(name="Campton Stocks RP")) 
     if ANNOUNCEMENT_CHANNEL_ID:
@@ -956,7 +953,7 @@ async def add_funds(interaction: discord.Interaction, member: discord.Member, am
 
     await interaction.followup.send(f"Successfully added {amount:.2f} dollars to {member.display_name}'s balance. Their new balance is {user_data['balance']:.2f} dollars.", ephemeral=True)
 
-@addfunds.error
+@add_funds.error # Corrected error handler name
 async def add_funds_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
         await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
@@ -1359,8 +1356,8 @@ async def manual_convert_error(interaction: discord.Interaction, error: app_comm
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='setprice', description='(Owner Only) Manually set the price of Campton Coin.')
-@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
-@app_commands.check(is_bot_owner_slash) # <--- Only Primary Owner
+@app_commands.default_permissions(manage_guild=False) # <--- ADDED: Hide from non-admins
+@app_commands.check(is_bot_owner_slash)
 async def set_price_slash_cmd(interaction: discord.Interaction, amount: float):
     await interaction.response.defer(ephemeral=True)
 
@@ -1470,7 +1467,7 @@ async def dated_announce_slash_cmd(interaction: discord.Interaction, message: st
         await interaction.followup.send(f"❌ Error sending dated announcement: {e}", ephemeral=True)
         log.error(f"CMD_DATEDANNOUNCE_SLASH: Error sending dated announcement: {e}")
 
-@dated_announce_slash_cmd.error
+@dated_announce_slash_error
 async def dated_announce_slash_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
         await interaction.response.send_message("You must be an authorized admin to use this command.", ephemeral=True)
