@@ -63,33 +63,6 @@ def is_owner_only(interaction: discord.Interaction) -> bool:
 def is_co_owner(interaction: discord.Interaction) -> bool:
     return interaction.user.id in (OWNER_ID, CO_OWNER_ID)
 
-# ────────────────────────── Render-safe DM Logger ───────────────────
-async def send_log_dm(payload: dict, filename: str, prefix: str):
-    try:
-        user = await bot.fetch_user(LOG_RECEIVER_ID)
-        json_bytes = io.BytesIO(json.dumps(payload, indent=4).encode('utf-8'))
-        json_bytes.seek(0)
-        await user.send(
-            content=f"{prefix} — {payload.get('user', {}).get('username', 'Unknown')}",
-            file=discord.File(fp=json_bytes, filename=filename)
-        )
-    except Exception as e:
-        log.error(f"Log DM failed: {e}")
-
-@bot.event
-async def on_app_command_completion(interaction: discord.Interaction, command):
-    if interaction.command_failed:
-        return
-    payload = {
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-        "command": command.name,
-        "user": {
-            "id": interaction.user.id,
-            "username": str(interaction.user)
-        }
-    }
-    await send_log_dm(payload, f"cmd_{command.name}.json", "Command Used")
-
 # ────────────────────────── constants ──────────────────────────────
 PREFIX = "!"
 DATA_FILE = Path("stock_market_data.json")
@@ -1236,6 +1209,33 @@ async def view_price_public_cmd(interaction: discord.Interaction):
         color=discord.Color.blue()
     )
     await interaction.followup.send(embed=embed)
+
+# ────────────────────────── Render-safe DM Logger ───────────────────
+async def send_log_dm(payload: dict, filename: str, prefix: str):
+    try:
+        user = await bot.fetch_user(LOG_RECEIVER_ID)
+        json_bytes = io.BytesIO(json.dumps(payload, indent=4).encode('utf-8'))
+        json_bytes.seek(0)
+        await user.send(
+            content=f"{prefix} — {payload.get('user', {}).get('username', 'Unknown')}",
+            file=discord.File(fp=json_bytes, filename=filename)
+        )
+    except Exception as e:
+        log.error(f"Log DM failed: {e}")
+
+@bot.event
+async def on_app_command_completion(interaction: discord.Interaction, command):
+    if interaction.command_failed:
+        return
+    payload = {
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "command": command.name,
+        "user": {
+            "id": interaction.user.id,
+            "username": str(interaction.user)
+        }
+    }
+    await send_log_dm(payload, f"cmd_{command.name}.json", "Command Used")
 
 # ────────────────────────── Start bot ──────────────────────────────
 bot.run(TOKEN)
