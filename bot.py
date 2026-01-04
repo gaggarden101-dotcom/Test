@@ -48,9 +48,12 @@ BACKUP_CHANNEL_ID         = env_int("BACKUP_CHANNEL_ID")
 NEW_ARRIVAL_ROLE_ID       = env_int("NEW_ARRIVAL_ROLE_ID")
 CAMPTON_CITIZEN_ROLE_ID   = env_int("CAMPTON_CITIZEN_ROLE_ID")
 MARKET_INVESTOR_ROLE_ID   = env_int("MARKET_INVESTOR_ROLE_ID")
+# CO_OWNER_ROLE_ID removed
 
 bot_owner_id_env = os.environ.get('OWNER_ID')
 OWNER_ID = int(bot_owner_id_env) if bot_owner_id_env and bot_owner_id_env.isdigit() else 0
+
+# CO_OWNER_IDS removed
 
 if not TOKEN:
     log.critical("DISCORD_BOT_TOKEN environment variable not found. Bot cannot start.")
@@ -58,7 +61,7 @@ if not TOKEN:
 
 # ────────────────────────── constants (DEFINED AT TOP) ──────────────────────────────
 PREFIX    = "!"
-DATA_FILE = Path("stock_market_data.json")
+DATA_FILE = Path("stock_market_data.json") # Local, ephemeral file path
 CAMPTOM_COIN_NAME = "Campton Coin" 
 
 MIN_PRICE, MAX_PRICE      = 50.00, 230.00
@@ -81,15 +84,36 @@ def too_many_decimals(x: Decimal, p: int) -> bool:
         return len(decimal_part) > p
     return False
 
-async def is_bot_owner_slash(interaction: discord.Interaction) -> bool:
-    return interaction.user.id == OWNER_ID
+# ────────────────────────── Permission Checks (Primary Owner Only) ──────────────────────────
+# These must be defined before any commands or tasks use them
+async def is_primary_owner(user_id: int) -> bool:
+    """Check if the user is the PRIMARY bot owner."""
+    return user_id == OWNER_ID
 
+async def is_admin(user_id: int) -> bool:
+    """Check if the user is in the list of authorized admin IDs."""
+    # Re-introducing ADMIN_IDS here, as it was removed but needed for this check
+    # This list will contain OWNER_ID and any specific co-owner IDs you provide
+    ADMIN_IDS_LIST = [OWNER_ID, 244214611400851458, 1321335530364993608] # <--- Your ID + Co-owners' IDs
+    return user_id in ADMIN_IDS_LIST
+
+# Slash command checks
+async def is_bot_owner_slash(interaction: discord.Interaction) -> bool:
+    return await is_primary_owner(interaction.user.id)
+
+async def is_admin_slash(interaction: discord.Interaction) -> bool:
+    return await is_admin(interaction.user.id)
+
+# Prefix command checks
 def is_primary_owner_prefix(ctx: commands.Context) -> bool:
     return ctx.author.id == OWNER_ID
 
+def is_admin_prefix(ctx: commands.Context) -> bool:
+    return ctx.author.id in [OWNER_ID, 244214611400851458, 1321335530364993608] # <--- Same ADMIN_IDS_LIST for prefix
+
 # ────────────────────────── data i/o (Discord backup) ──────────────
 save_lock = asyncio.Lock()
-backup_channel_global: discord.TextChannel | None = None
+backup_channel_global: discord.TextChannel | None = None # Global to store the fetched channel
 
 def _ensure_data_dir_exists():
     if not DATA_FILE.parent.exists():
@@ -135,7 +159,7 @@ async def save_data():
             log.warning("SAVE_DATA_CALL: BACKUP_CHANNEL_ID not set in environment. Discord backup skipped.")
             return
         
-        ch = backup_channel_global
+        ch = backup_channel_global # Use the globally stored channel object
         if not ch:
             log.warning(f"SAVE_DATA_CALL: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Discord backup skipped.")
             return
@@ -220,7 +244,7 @@ def guild() -> discord.Guild | None:
 def price() -> Decimal:
     return Decimal(str(market_data["coins"][CAMPTOM_COIN_NAME]["price"]))
 
-def set_price_in_data(p: Decimal):
+def set_price_in_data(p: Decimal): # Renamed helper to avoid conflict with command
     market_data["coins"][CAMPTOM_COIN_NAME]["price"] = float(p)
 
 def get_user(uid: int) -> dict[str, Any]:
@@ -375,7 +399,7 @@ async def _perform_crypto_to_cash_conversion():
 async def scheduled_price_update():
     log.info("TASK_PRICE: Running scheduled price update...")
     await bot.change_presence(activity=discord.Game(name="Updating Market Prices...")) 
-    update_prices_logic() 
+    update_prices_logic()
     await save_data() 
     await bot.change_presence(activity=discord.Game(name="Campton Stocks RP")) 
     if ANNOUNCEMENT_CHANNEL_ID:
@@ -1155,7 +1179,7 @@ async def close(interaction: discord.Interaction):
 
     ticket_info = market_data["tickets"][str(interaction.channel.id)]
     
-    if interaction.user.id != ticket_info["user_id"] and interaction.user.id != OWNER_ID: # Only ticket creator OR primary owner can close
+    if interaction.user.id != ticket_info["user_id"] and interaction.user.id != OWNER_ID:
         await interaction.followup.send("You must be the ticket creator or the bot owner to close this ticket.", ephemeral=True)
         return
 
@@ -1165,7 +1189,7 @@ async def close(interaction: discord.Interaction):
     async def confirm_callback(button_interaction: discord.Interaction):
         await button_interaction.response.defer(ephemeral=True)
 
-        if button_interaction.user.id != interaction.user.id and button_interaction.user.id != OWNER_ID: # Only ticket creator OR primary owner can confirm
+        if button_interaction.user.id != interaction.user.id and button_interaction.user.id != OWNER_ID:
             await button_interaction.followup.send("Only the person who initiated the close or the bot owner can confirm.", ephemeral=True)
             return
 
@@ -1181,7 +1205,7 @@ async def close(interaction: discord.Interaction):
             await interaction.channel.delete()
         except discord.Forbidden:
             await button_interaction.followup.send(
-                "I do not have permission to manage channels. Please ensure I have 'Manage Channels' permission in this category.",
+                "I do not have permission to delete channels. Please ensure I have 'Manage Channels' permission in this category.",
                 ephemeral=True
             )
             log.error(f"ERROR: Bot lacks 'Manage Channels' permission to delete ticket {interaction.channel.name} ({interaction.channel.id}).")
@@ -1335,8 +1359,8 @@ async def manual_convert_error(interaction: discord.Interaction, error: app_comm
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='setprice', description='(Owner Only) Manually set the price of Campton Coin.')
-@app_commands.default_permissions(manage_guild=False) # <--- ADDED: Hide from non-admins
-@app_commands.check(is_bot_owner_slash)
+@app_commands.default_permissions(manage_guild=False) # <--- HIDE FROM NON-ADMINS
+@app_commands.check(is_bot_owner_slash) # <--- Only Primary Owner
 async def set_price_slash_cmd(interaction: discord.Interaction, amount: float):
     await interaction.response.defer(ephemeral=True)
 
@@ -1458,7 +1482,7 @@ async def dated_announce_slash_error(interaction: discord.Interaction, error: ap
 
 @bot.tree.command(name='ping', description='Checks the bot\'s latency to Discord.')
 async def ping(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True) # Ping is always ephemeral
+    await interaction.response.defer(ephemeral=True)
     await interaction.followup.send(f"Pong! Latency: {round(bot.latency * 1000)}ms", ephemeral=True)
 
 @bot.tree.command(name='viewprice', description='Displays the current price of Campton Coin for everyone.')
