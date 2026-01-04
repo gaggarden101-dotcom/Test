@@ -99,6 +99,13 @@ INITIAL_PRICE = 120.00
 VOLATILITY_LEVELS = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00, 1.20, 1.50]
 CRYPTO_NAMES = ["Campton Coin"]
 
+# ────────────────────────── discord objects ────────────────────────
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+
+
 # ────────────────────────── decimal helpers ────────────────────────
 def D(x: float|str|Decimal) -> Decimal:
     return Decimal(str(x)).quantize(Decimal("0.000"), rounding=ROUND_DOWN)
@@ -230,12 +237,6 @@ market_data: dict[str, Any] = {
     "next_conversion_timestamp": (discord.utils.utcnow() + timedelta(days=7)).isoformat(),
 }
 market_data.update(_read_json_local_fallback())
-
-# ────────────────────────── discord objects ────────────────────────
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
 # ────────────────────────── helpers ────────────────────────────────
 def guild() -> discord.Guild | None:
