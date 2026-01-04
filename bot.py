@@ -48,13 +48,14 @@ BACKUP_CHANNEL_ID         = env_int("BACKUP_CHANNEL_ID")
 NEW_ARRIVAL_ROLE_ID       = env_int("NEW_ARRIVAL_ROLE_ID")
 CAMPTON_CITIZEN_ROLE_ID   = env_int("CAMPTON_CITIZEN_ROLE_ID")
 MARKET_INVESTOR_ROLE_ID   = env_int("MARKET_INVESTOR_ROLE_ID")
+CO_OWNER_ROLE_ID          = env_int("CO_OWNER_ROLE_ID") # <--- NEW: Co-Owner Role ID
 
 bot_owner_id_env = os.environ.get('OWNER_ID')
 OWNER_ID = int(bot_owner_id_env) if bot_owner_id_env and bot_owner_id_env.isdigit() else 0
 
 # --- CO-OWNER IDS (for specific shared commands) ---
 # Your ID and your co-owners' IDs
-CO_OWNER_IDS = [OWNER_ID, 244214611400851458, 1321335530364993608] # <--- ADDED CO-OWNER IDS
+CO_OWNER_IDS = [OWNER_ID, 244214611400851458, 1321335530364993608] 
 
 if not TOKEN:
     log.critical("DISCORD_BOT_TOKEN environment variable not found. Bot cannot start.")
@@ -90,8 +91,17 @@ async def is_bot_owner_slash(interaction: discord.Interaction) -> bool:
     return interaction.user.id == OWNER_ID
 
 async def is_owner_or_co_owner_slash(interaction: discord.Interaction) -> bool:
-    """Check if the interaction's user is the PRIMARY owner OR a designated co-owner."""
-    return interaction.user.id in CO_OWNER_IDS # <--- NEW CHECK FOR CO-OWNERS
+    """Check if the interaction's user is the PRIMARY owner, a designated co-owner ID, or has the CO_OWNER_ROLE_ID."""
+    if interaction.user.id in CO_OWNER_IDS:
+        return True
+    
+    if CO_OWNER_ROLE_ID:
+        guild_member = interaction.guild.get_member(interaction.user.id)
+        if guild_member:
+            co_owner_role = interaction.guild.get_role(CO_OWNER_ROLE_ID)
+            if co_owner_role and co_owner_role in guild_member.roles:
+                return True
+    return False
 
 # ────────────────────────── data i/o (Discord backup) ──────────────
 save_lock = asyncio.Lock()
@@ -141,7 +151,7 @@ async def save_data():
             log.warning("SAVE_DATA_CALL: BACKUP_CHANNEL_ID not set in environment. Discord backup skipped.")
             return
         
-        ch = backup_channel_global # Use the globally stored channel object
+        ch = backup_channel_global
         if not ch:
             log.warning(f"SAVE_DATA_CALL: Backup channel object not available (ID: {BACKUP_CHANNEL_ID}). Discord backup skipped.")
             return
@@ -149,7 +159,6 @@ async def save_data():
         try:
             log.info(f"SAVE_DATA_CALL: Checking for old backup messages in channel {ch.name} ({ch.id}).")
             deleted_old_backup = False
-            # Manually filter by author for history() compatibility
             async for msg in ch.history(limit=10): 
                 if msg.author == bot.user and msg.attachments: 
                     await msg.delete()
@@ -190,7 +199,6 @@ async def load_data_from_discord():
     
     try:
         log.info(f"LOAD_DATA_CALL: Searching for latest backup in channel {ch.name} ({ch.id}).")
-        # Manually filter by author for history() compatibility
         async for msg in ch.history(limit=10):
             if msg.author == bot.user and msg.attachments: 
                 data = await msg.attachments[0].read()
@@ -872,13 +880,13 @@ async def sell_cmd(interaction: discord.Interaction, quantity: float):
         await interaction.followup.send(result, ephemeral=True)
 
 @bot.tree.command(name='addfunds', description='(Owner/Co-Owner) Add cash to a member\'s balance.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
 @app_commands.describe(member='The user to add funds to.', amount='The amount of funds to add.')
 async def add_funds(interaction: discord.Interaction, member: discord.Member, amount: float):
     await interaction.response.defer(ephemeral=True)
 
-    if interaction.user.id not in CO_OWNER_IDS:
+    if not await is_owner_or_co_owner_slash(interaction): # Explicit check in command body
         await interaction.followup.send("You must be the bot owner or a co-owner to use this command.", ephemeral=True)
         return
 
@@ -892,14 +900,24 @@ async def add_funds(interaction: discord.Interaction, member: discord.Member, am
 
     await interaction.followup.send(f"Successfully added {amount:.2f} dollars to {member.display_name}'s balance. Their new balance is {user_data['balance']:.2f} dollars.", ephemeral=True)
 
+@addfunds.error # Corrected error handler name
+async def add_funds_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CheckFailure):
+        await interaction.response.send_message("You must be the bot owner or a co-owner to use this command.", ephemeral=True)
+    else:
+        if interaction.response.is_done():
+            await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
+
 @bot.tree.command(name='addcoins', description='(Owner/Co-Owner) Add Campton Coin to a member\'s portfolio.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
 @app_commands.describe(member='The user to add coins to.', quantity='The number of coins to add.')
 async def addcoins(interaction: discord.Interaction, member: discord.Member, quantity: float):
     await interaction.response.defer(ephemeral=True)
 
-    if interaction.user.id not in CO_OWNER_IDS:
+    if not await is_owner_or_co_owner_slash(interaction): # Explicit check in command body
         await interaction.followup.send("You must be the bot owner or a co-owner to use this command.", ephemeral=True)
         return
 
@@ -962,13 +980,13 @@ async def withdraw(interaction: discord.Interaction, amount: float):
         await interaction.followup.send("Could not find the bot owner to send the withdrawal request. Please ensure the bot owner is correctly configured.", ephemeral=True)
 
 @bot.tree.command(name='approvewithdrawal', description='(Owner/Co-Owner) Approves a user\'s withdrawal request and deducts funds.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
 @app_commands.describe(user_id='The ID of the user whose withdrawal to approve.', amount='The Amount to deduct.')
 async def approve_withdrawal(interaction: discord.Interaction, user_id: str, amount: float):
     await interaction.response.defer(ephemeral=True)
 
-    if interaction.user.id not in CO_OWNER_IDS: # <--- Updated check
+    if not await is_owner_or_co_owner_slash(interaction): # Explicit check in command body
         await interaction.followup.send("You must be the bot owner or a co-owner to use this command.", ephemeral=True)
         return
 
@@ -1005,6 +1023,17 @@ async def approve_withdrawal(interaction: discord.Interaction, user_id: str, amo
         await target_user.send(embed=user_approved_embed)
     except discord.Forbidden:
         log.warning(f"WARNING: Could not send DM to user {target_user.name} about approved withdrawal. DMs might be disabled.")
+
+@approvewithdrawal.error # Corrected error handler name
+async def approve_withdrawal_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CheckFailure):
+        await interaction.response.send_message("You must be the bot owner or a co-owner to use this command.", ephemeral=True)
+    else:
+        if interaction.response.is_done():
+            await interaction.followup.send(f"An unexpected error occurred: {error}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
+
 
 @bot.tree.command(name='transfer', description='Transfer cash or Campton Coin to another user.')
 @app_commands.describe(
@@ -1191,11 +1220,15 @@ async def close(interaction: discord.Interaction):
     await interaction.followup.send("Are you sure you want to close this ticket?", view=confirm_view, ephemeral=True)
 
 @bot.tree.command(name='clearmessages', description='(Owner/Co-Owner) Clears a specified number of messages from the current channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
 @app_commands.describe(amount='The number of messages to clear (1-100).')
 async def clearmessages(interaction: discord.Interaction, amount: int):
     await interaction.response.defer(ephemeral=True)
+
+    if not await is_owner_or_co_owner_slash(interaction): # Explicit check in command body
+        await interaction.followup.send("You must be the bot owner or a co-owner to use this command.", ephemeral=True)
+        return
 
     if not (1 <= amount <= 100):
         await interaction.followup.send("You can only clear between 1 and 100 messages.", ephemeral=True)
@@ -1230,8 +1263,9 @@ async def clearmessages_error(interaction: discord.Interaction, error: app_comma
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='lockdown', description='(Owner/Co-Owner) Locks down the current channel or a specified channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
+@app_commands.describe(channel='The channel to lock down (defaults to current channel).')
 async def lockdown(interaction: discord.Interaction, channel: discord.TextChannel = None):
     await interaction.response.defer(ephemeral=True)
     target_channel = channel or interaction.channel
@@ -1269,8 +1303,9 @@ async def lockdown_error(interaction: discord.Interaction, error: app_commands.A
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='unlock', description='(Owner/Co-Owner) Unlocks the current channel or a specified channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
+@app_commands.describe(channel='The channel to unlock (defaults to current channel).')
 async def unlock(interaction: discord.Interaction, channel: discord.TextChannel = None):
     await interaction.response.defer(ephemeral=True)
     target_channel = channel or interaction.channel
@@ -1308,7 +1343,7 @@ async def unlock_error(interaction: discord.Interaction, error: app_commands.App
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='manualconvert', description='(Owner/Co-Owner) Manually triggers the crypto to cash conversion for all users.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
 async def manual_convert(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -1329,7 +1364,7 @@ async def manual_convert_error(interaction: discord.Interaction, error: app_comm
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='setprice', description='(Owner Only) Manually set the price of Campton Coin.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- ADDED: Hide from non-admins
 @app_commands.check(is_bot_owner_slash) # <--- Only Primary Owner
 async def set_price_cmd(interaction: discord.Interaction, amount: float):
     await interaction.response.defer(ephemeral=True)
@@ -1365,7 +1400,7 @@ async def set_price_error(interaction: discord.Interaction, error: app_commands.
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='save', description='(Owner/Co-Owner) Manually save all market data.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
 async def save_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -1388,7 +1423,7 @@ async def save_error(interaction: discord.Interaction, error: app_commands.AppCo
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='announce', description='(Owner/Co-Owner) Make the bot announce something to the channel.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
 @app_commands.describe(message='The message for the bot to announce.')
 async def announce(interaction: discord.Interaction, message: str):
@@ -1412,7 +1447,7 @@ async def announce_error(interaction: discord.Interaction, error: app_commands.A
             await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)
 
 @bot.tree.command(name='datedannounce', description='(Owner/Co-Owner) Make the bot announce something with a date.')
-@app_commands.default_permissions(manage_guild=False)
+@app_commands.default_permissions(manage_guild=False) # <--- REMOVED: No default_permissions for co-owner visible commands
 @app_commands.check(is_owner_or_co_owner_slash) # <--- Changed to include co-owners
 @app_commands.describe(
     message='The message for the bot to announce.',
