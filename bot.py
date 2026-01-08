@@ -802,23 +802,80 @@ async def sell_cmd(interaction: discord.Interaction, quantity: float):
         check_and_assign_investor_role(interaction.user.id, interaction.guild)
     else:
         await interaction.followup.send(result, ephemeral=True)
-
-@bot.tree.command(name='addfunds', description='Adds funds to a specified user\'s balance. (Bot Owner Only)')
-@app_commands.default_permissions(manage_guild=False)
-@app_commands.describe(member='The user to add funds to.', amount='The amount of funds to add.')
+        
+@bot.tree.command(
+    name='addfunds',
+    description='Adds funds to a specified user\'s balance. (Owner/Co-Owner)'
+)
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    member='The user to add funds to.',
+    amount='The amount of funds to add.'
+)
 @app_commands.check(is_co_owner)
-async def add_funds(interaction: discord.Interaction, member: discord.Member, amount: float):
+async def add_funds(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    amount: float
+):
     await interaction.response.defer(ephemeral=True)
 
     if amount <= 0:
-        await interaction.followup.send("Amount must be greater than 0.", ephemeral=True)
-        return
+        return await interaction.followup.send(
+            "Amount must be greater than 0.",
+            ephemeral=True
+        )
 
-    user_data = get_user(member.id) 
-    user_data["balance"] = float(D(str(user_data["balance"])) + Decimal(str(amount))) 
+    user_data = get_user(member.id)
+    user_data["balance"] = float(
+        D(str(user_data["balance"])) + Decimal(str(amount))
+    )
     await save_data()
 
-    await interaction.followup.send(f"Successfully added {amount:.2f} dollars to {member.display_name}'s balance. Their new balance is {user_data['balance']:.2f} dollars.", ephemeral=True)
+    await interaction.followup.send(
+        f"Successfully added {amount:.2f} dollars to {member.display_name}'s balance. "
+        f"Their new balance is {user_data['balance']:.2f} dollars.",
+        ephemeral=True
+    )
+
+@bot.tree.command(
+    name="removefunds",
+    description="(Owner/Co-Owner) Remove funds from a user"
+)
+@app_commands.check(is_co_owner)
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    member="The user to remove funds from",
+    amount="Amount of funds to remove"
+)
+async def removefunds(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    amount: float
+):
+    await interaction.response.defer(ephemeral=True)
+
+    if amount <= 0:
+        return await interaction.followup.send(
+            "Amount must be greater than 0.",
+            ephemeral=True
+        )
+
+    user_data = get_user(member.id)
+
+    if user_data["balance"] < amount:
+        return await interaction.followup.send(
+            f"{member.display_name} does not have enough funds.",
+            ephemeral=True
+        )
+
+    user_data["balance"] -= amount
+    await save_data()
+
+    await interaction.followup.send(
+        f"Removed **${amount:.2f}** from {member.display_name}.",
+        ephemeral=True
+    )
 
 @bot.tree.command(name='addcoins', description='(Owner) Add Campton Coin to a member\'s portfolio.')
 @app_commands.default_permissions(manage_guild=False)
@@ -840,6 +897,57 @@ async def addcoins(interaction: discord.Interaction, member: discord.Member, qua
     await save_data()
 
     await interaction.followup.send(f"Successfully added {quantity:.3f} {CAMPTOM_COIN_NAME} to {member.display_name}'s portfolio. They now have {user_data['portfolio'][CAMPTOM_COIN_NAME]:.3f} coins.", ephemeral=True)
+@bot.tree.command(
+    name="removecoins",
+    description="(Owner/Co-Owner) Remove coins from a user"
+)
+@app_commands.check(is_co_owner)
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    member="The user to remove coins from",
+    amount="Amount of coins to remove"
+)
+async def removecoins(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    amount: float
+):
+    await interaction.response.defer(ephemeral=True)
+
+    if amount <= 0:
+        return await interaction.followup.send(
+            "Amount must be greater than 0.",
+            ephemeral=True
+        )
+
+    if too_many_decimals(Decimal(str(amount)), 3):
+        return await interaction.followup.send(
+            "Coins can only have up to 3 decimal places.",
+            ephemeral=True
+        )
+
+    user_data = get_user(member.id)
+
+    current = Decimal(str(
+        user_data["portfolio"].get(CAMPTOM_COIN_NAME, 0.0)
+    ))
+
+    if current < Decimal(str(amount)):
+        return await interaction.followup.send(
+            f"{member.display_name} does not have enough coins.",
+            ephemeral=True
+        )
+
+    user_data["portfolio"][CAMPTOM_COIN_NAME] = float(
+        current - Decimal(str(amount))
+    )
+
+    await save_data()
+
+    await interaction.followup.send(
+        f"Removed **{amount:.3f} {CAMPTOM_COIN_NAME}** from {member.display_name}.",
+        ephemeral=True
+    )
 
 @bot.tree.command(name='withdraw', description='Requests a withdrawal of funds from your balance. Funds are deducted upon owner approval.')
 @app_commands.describe(amount='The amount of funds to request for withdrawal.')
